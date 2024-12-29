@@ -4,7 +4,7 @@ import os
 import time
 import numpy as np
 import time
-from sar_env import env as env_f
+from sar_env_updated import env as env_f
 from sb3_contrib import RecurrentPPO
 
 
@@ -16,18 +16,34 @@ def eval(env_fn, num_games: int = 100, render_mode = None, **env_kwargs):
     print(
         f"\nStarting evaluation on {str(env.metadata['name'])} (num_games={num_games}, render_mode={render_mode})"
     )
-
+    
+    # Add option to manually specify policy name
+    manual_policy_name = input(
+        "Enter the policy name (e.g., policy_name.zip) or press Enter to load the latest: "
+    ).strip()
+    
     try:
-        latest_policy = max(
-            glob.glob(f"{env.metadata['name']}*.zip"), key=os.path.getctime
-        )
+        if manual_policy_name:
+            # Load the manually specified policy
+            if os.path.exists(manual_policy_name):
+                model = PPO.load(manual_policy_name)
+                print(f"Loaded policy: {manual_policy_name}")
+            else:
+                print(f"Policy '{manual_policy_name}' not found.")
+                exit(0)
+        else:
+            # Fallback to the latest policy if no name is provided
+            latest_policy = max(
+                glob.glob(f"{env.metadata['name']}*.zip"), key=os.path.getctime
+            )
+            model = PPO.load(latest_policy)
+            print(f"Loaded the latest policy: {latest_policy}")
     except ValueError:
         print("Policy not found.")
         exit(0)
-        
-    model = PPO.load(latest_policy)
-    # model = RecurrentPPO.load(latest_policy)
-#     model = DQN.load(latest_policy)
+    
+        # model = RecurrentPPO.load(latest_policy)
+    #     model = DQN.load(latest_policy)
 
     rewards = {agent: 0 for agent in env.possible_agents}
 

@@ -1,5 +1,5 @@
 import supersuit as ss
-from sar_env import parallel_env
+from sar_env_updated import parallel_env
 from stable_baselines3 import PPO
 import time
 from sb3_contrib import RecurrentPPO
@@ -10,7 +10,7 @@ def train(env_fn, steps: int = 100, seed = 0, **env_kwargs):
     env = parallel_env(**env_kwargs)
 
     env.reset(seed=seed)
-    tmp_path = "search_rescue/sb3_log/"
+    tmp_path = "C:/Users/pancz/search_rescue_logs"
     new_logger = configure(tmp_path, ["stdout", "csv", "tensorboard"])
 
 

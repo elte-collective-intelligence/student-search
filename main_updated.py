@@ -1,6 +1,6 @@
 from pettingzoo.mpe._mpe_utils.simple_env import make_env
 
-from sar_env import make_env, raw_env, parallel_wrapper_fn, parallel_env, env
+from sar_env_updated import make_env, raw_env, parallel_wrapper_fn, parallel_env, env
 from pettingzoo.test import parallel_api_test
 import supersuit as ss
 
@@ -10,12 +10,12 @@ import os
 import time
 import numpy as np
 import time
-from eval import eval
+from eval_updated import eval
 import supersuit as ss
 from stable_baselines3 import PPO
 from stable_baselines3.ppo import CnnPolicy, MlpPolicy
 
-from train import train
+from train_updated import train
 # from sb3_contrib import RecurrentPPO
 # from stable_baselines3.common.evaluation import evaluate_policy
 # from stable_baselines3 import DQN
@@ -25,10 +25,10 @@ from train import train
 
 def main():
     # Set render_mode to None to reduce training time
-    env_kwargs = dict(num_missing=1, num_rescuers=3, num_trees=8, max_cycles=120, continuous_actions=False)
+    env_kwargs = dict(num_missing=1, num_rescuers=3, num_trees=8, num_safezones=4, max_cycles=120, continuous_actions=False)
     env_fn = "search_and_rescue"
-    # train(env_fn, steps=1e5, seed=0, render_mode=None, **env_kwargs)
-    eval(env_fn, num_games=10, render_mode=None, **env_kwargs)
+    #train(env_fn, steps=1e5, seed=0, render_mode=None, **env_kwargs)
+    eval(env_fn, num_games=10, render_mode='human', **env_kwargs)
     
     
 # if __name__ == "__main__":
