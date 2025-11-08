@@ -10,7 +10,7 @@ def train(env_fn, steps: int = 100, seed = 0, **env_kwargs):
     env = parallel_env(**env_kwargs)
 
     env.reset(seed=seed)
-    tmp_path = "C:/Users/pancz/search_rescue_logs"
+    tmp_path = "search_rescue_logs/"
     new_logger = configure(tmp_path, ["stdout", "csv", "tensorboard"])
 
 
