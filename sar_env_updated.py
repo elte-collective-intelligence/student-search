@@ -53,6 +53,10 @@ parallel_env = parallel_wrapper_fn(env)
 
 
 class Scenario(BaseScenario):
+    def __init__(self) -> None:
+        super().__init__()
+        self.vision = 15
+    
     def make_world(self, num_missing=1, num_rescuers=3, num_trees=5, num_safezones=4):
         victim_types = ["A", "B", "C", "D"]  # Example types for victims
         safe_zone_types = ["A", "B", "C", "D"]  # Matching types for safe zones
