@@ -55,3 +55,6 @@ __pycache__/
 logs/
 outputs/
 wandb/
+
+# Python version
+.python-version
