@@ -40,6 +40,7 @@ def main(cfg: DictConfig):
             steps=cfg.train.total_timesteps,
             seed=cfg.train.seed,
             render_mode=cfg.train.render_mode,
+            save_folder=cfg.save_folder,
             **env_kwargs
         )
     elif cfg.eval.active:
@@ -47,6 +48,7 @@ def main(cfg: DictConfig):
             env_fn,
             num_games=cfg.eval.games,
             render_mode=cfg.eval.render_mode,
+            save_folder=cfg.save_folder,
             **env_kwargs
         )
 

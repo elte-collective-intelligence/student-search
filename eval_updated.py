@@ -8,7 +8,7 @@ from sar_env_updated import env as env_f
 from sb3_contrib import RecurrentPPO
 
 
-def eval(env_fn, num_games: int = 100, render_mode = None, **env_kwargs):
+def eval(env_fn, num_games: int = 100, save_folder : str = "search_rescue_logs/", render_mode = None, **env_kwargs):
     # Evaluate a trained agent vs a random agent
 
 
