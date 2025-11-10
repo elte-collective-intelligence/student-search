@@ -6,12 +6,11 @@ from sb3_contrib import RecurrentPPO
 from stable_baselines3.common.logger import configure
 from stable_baselines3.common.callbacks import EvalCallback, StopTrainingOnNoModelImprovement
 
-def train(env_fn, steps: int = 100, seed = 0, **env_kwargs):
+def train(env_fn, steps: int = 100, seed = 0, save_folder : str = "search_rescue_logs/", **env_kwargs):
     env = parallel_env(**env_kwargs)
 
     env.reset(seed=seed)
-    tmp_path = "search_rescue_logs/"
-    new_logger = configure(tmp_path, ["stdout", "csv", "tensorboard"])
+    new_logger = configure(save_folder, ["stdout", "csv", "tensorboard"])
 
 
 
@@ -30,7 +29,7 @@ def train(env_fn, steps: int = 100, seed = 0, **env_kwargs):
 
     # Train
     model.learn(total_timesteps=steps, tb_log_name="MLP_Policy", callback=eval_callback)
-    model.save(f"{env.unwrapped.metadata.get('name')}_{time.strftime('%Y%m%d-%H%M%S')}")
+    model.save(f"{save_folder}/{env.unwrapped.metadata.get('name')}_{time.strftime('%Y%m%d-%H%M%S')}")
 
     print("Model has been saved.")
 

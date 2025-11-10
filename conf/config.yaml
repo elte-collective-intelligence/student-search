@@ -17,3 +17,4 @@ eval:
   active: false
   games: 10
   render_mode: "human"
+save_folder: "search_rescue_logs/"
