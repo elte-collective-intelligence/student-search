@@ -1,3 +1,4 @@
+import argparse
 from pettingzoo.mpe._mpe_utils.simple_env import make_env
 
 from sar_env_updated import make_env, raw_env, parallel_wrapper_fn, parallel_env, env
@@ -21,37 +22,32 @@ from train_updated import train
 # from stable_baselines3 import DQN
 # from stable_baselines3.dqn import CnnPolicy, MlpPolicy
 
-
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Image captioning training pipeline")
+    parser.add_argument(
+        "--train",
+        action="store_true",
+        help="Run training for the search and rescue environment.",
+    )
+    parser.add_argument(
+        "--eval",
+        action="store_true",
+        help="Evaluate a trained model in the search and rescue environment with graphical visualization.",
+    )
+    # parse_known_args avoids crashing when extra arguments are forwarded
+    args, _ = parser.parse_known_args()
+    return args
 
 def main():
     # Set render_mode to None to reduce training time
     env_kwargs = dict(num_missing=1, num_rescuers=3, num_trees=8, num_safezones=4, max_cycles=120, continuous_actions=False)
     env_fn = "search_and_rescue"
-    #train(env_fn, steps=1e5, seed=0, render_mode=None, **env_kwargs)
-    eval(env_fn, num_games=10, render_mode='human', **env_kwargs)
-    
-    
-# if __name__ == "__main__":
-#     main()
-
-# def main():
-#     seed = 22
-#     # env = parallel_wrapper_fn(env)
-#     env = parallel_env()
-
-#     # env.reset(seed=seed)
-#     # env_v =env()
-#     print(f"Starting training on {str(env.metadata['name'])}.")
-#     env = ss.multiagent_wrappers.pad_observations_v0(env)
-#     env = ss.pettingzoo_env_to_vec_env_v1(env)
-#     env = ss.concat_vec_envs_v1(env, 8, num_cpus=1, base_class="stable_baselines3")
-
-#     parallel_api_test(env, num_cycles=1_000_000)
-
-
-
-
-
+    if args.train:
+        train(env_fn, steps=int(1e5), seed=0, render_mode=None, **env_kwargs)
+    elif args.eval:
+        eval(env_fn, num_games=10, render_mode='human', **env_kwargs)
+    else:
+        print("Please specify either --train or --eval to run the respective process.")
 
 
 if __name__ == "__main__":
