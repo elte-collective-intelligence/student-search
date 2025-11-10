@@ -10,18 +10,18 @@ from sb3_contrib import RecurrentPPO
 
 def eval(env_fn, num_games: int = 100, render_mode = None, **env_kwargs):
     # Evaluate a trained agent vs a random agent
-    
+
 
     env = env_f(render_mode=render_mode, **env_kwargs)
     print(
         f"\nStarting evaluation on {str(env.metadata['name'])} (num_games={num_games}, render_mode={render_mode})"
     )
-    
+
     # Add option to manually specify policy name
     manual_policy_name = input(
         "Enter the policy name (e.g., policy_name.zip) or press Enter to load the latest: "
     ).strip()
-    
+
     try:
         if manual_policy_name:
             # Load the manually specified policy
@@ -41,7 +41,7 @@ def eval(env_fn, num_games: int = 100, render_mode = None, **env_kwargs):
     except ValueError:
         print("Policy not found.")
         exit(0)
-    
+
         # model = RecurrentPPO.load(latest_policy)
     #     model = DQN.load(latest_policy)
 
@@ -52,7 +52,7 @@ def eval(env_fn, num_games: int = 100, render_mode = None, **env_kwargs):
     for i in range(num_games):
         env.reset(seed=i)
         env.action_space(env.possible_agents[0]).seed(i)
-        
+
         for agent in env.agent_iter():
             obs, reward, termination, truncation, info = env.last()
             # if agent == 'agent_0':
@@ -82,4 +82,3 @@ def eval(env_fn, num_games: int = 100, render_mode = None, **env_kwargs):
     print("Avg reward per agent, per game: ", avg_reward_per_agent)
     print("Full rewards: ", rewards)
     return avg_reward
-

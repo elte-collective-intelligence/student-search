@@ -51,16 +51,16 @@ Ensure you have Python 3.10 installed and necessary packages for running Petting
    - Refined detection ensures rescues occur only when victims and rescuers are close.
    - Introduced obstacle collision logic to prevent straightforward rescues.
 
-## Documentation  
+## Documentation
 
-For a detailed description of the environment, reward system, training pipeline, and evaluation process, refer to the complete project documentation:  
-📄 [**Documentation.pdf**](Documentation.pdf)  
+For a detailed description of the environment, reward system, training pipeline, and evaluation process, refer to the complete project documentation:
+📄 [**Documentation.pdf**](Documentation.pdf)
 
 The documentation includes:
 
-- Functionalities of the search-and-rescue environment.  
-- Code structure and modular components.  
-- Training and evaluation pipelines with performance metrics.  
+- Functionalities of the search-and-rescue environment.
+- Code structure and modular components.
+- Training and evaluation pipelines with performance metrics.
 
 ## Usage
 
