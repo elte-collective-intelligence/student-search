@@ -1,0 +1,19 @@
+env:
+  missing: 1
+  rescuers: 3
+  trees: 8
+  safezones: 4
+  max_cycles: 120
+  continuous_actions: false
+train:
+  active: false
+  total_timesteps: 1000000
+  eval_freq: 1000
+  batch_size: 256
+  n_epochs: 40
+  seed: 0
+  render_mode: null
+eval:
+  active: false
+  games: 10
+  render_mode: "human"

@@ -4,6 +4,8 @@ from sar_env_updated import make_env, raw_env, parallel_wrapper_fn, parallel_env
 from pettingzoo.test import parallel_api_test
 import supersuit as ss
 
+import hydra
+from omegaconf import DictConfig, OmegaConf
 
 import glob
 import os
@@ -16,42 +18,37 @@ from stable_baselines3 import PPO
 from stable_baselines3.ppo import CnnPolicy, MlpPolicy
 
 from train_updated import train
-# from sb3_contrib import RecurrentPPO
-# from stable_baselines3.common.evaluation import evaluate_policy
-# from stable_baselines3 import DQN
-# from stable_baselines3.dqn import CnnPolicy, MlpPolicy
 
 
-
-def main():
-    # Set render_mode to None to reduce training time
-    env_kwargs = dict(num_missing=1, num_rescuers=3, num_trees=8, num_safezones=4, max_cycles=120, continuous_actions=False)
+@hydra.main(version_base=None, config_path="conf", config_name="config")
+def main(cfg: DictConfig):
+    assert (
+        cfg.train.active ^ cfg.eval.active
+    ), "Please specify one of train.active=true or eval.active=true in the arguments."
+    env_kwargs = {
+        "num_missing": cfg.env.missing,
+        "num_rescuers": cfg.env.rescuers,
+        "num_trees": cfg.env.trees,
+        "num_safezones": cfg.env.safezones,
+        "max_cycles": cfg.env.max_cycles,
+        "continuous_actions": cfg.env.continuous_actions,
+    }
     env_fn = "search_and_rescue"
-    #train(env_fn, steps=1e5, seed=0, render_mode=None, **env_kwargs)
-    eval(env_fn, num_games=10, render_mode='human', **env_kwargs)
-    
-    
-# if __name__ == "__main__":
-#     main()
-
-# def main():
-#     seed = 22
-#     # env = parallel_wrapper_fn(env)
-#     env = parallel_env()
-
-#     # env.reset(seed=seed)
-#     # env_v =env()
-#     print(f"Starting training on {str(env.metadata['name'])}.")
-#     env = ss.multiagent_wrappers.pad_observations_v0(env)
-#     env = ss.pettingzoo_env_to_vec_env_v1(env)
-#     env = ss.concat_vec_envs_v1(env, 8, num_cpus=1, base_class="stable_baselines3")
-
-#     parallel_api_test(env, num_cycles=1_000_000)
-
-
-
-
-
+    if cfg.train.active:
+        train(
+            env_fn,
+            steps=cfg.train.total_timesteps,
+            seed=cfg.train.seed,
+            render_mode=cfg.train.render_mode,
+            **env_kwargs
+        )
+    elif cfg.eval.active:
+        eval(
+            env_fn,
+            num_games=cfg.eval.games,
+            render_mode=cfg.eval.render_mode,
+            **env_kwargs
+        )
 
 
 if __name__ == "__main__":
