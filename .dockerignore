@@ -94,3 +94,4 @@ LICENSE
 README.md
 *.pdf
 search_rescue_logs/
+docker/
