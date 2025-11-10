@@ -49,14 +49,14 @@ env = make_env(raw_env)
 parallel_env = parallel_wrapper_fn(env)
 
 
-        
+
 
 
 class Scenario(BaseScenario):
     def __init__(self) -> None:
         super().__init__()
         self.vision = 15
-    
+
     def make_world(self, num_missing=1, num_rescuers=3, num_trees=5, num_safezones=4):
         victim_types = ["A", "B", "C", "D"]  # Example types for victims
         safe_zone_types = ["A", "B", "C", "D"]  # Matching types for safe zones
@@ -121,7 +121,7 @@ class Scenario(BaseScenario):
         "C": np.array([0.0, 0.0, 1.0]),  # Blue
         "D": np.array([1.0, 1.0, 0.0])   # Yellow
         }
-        
+
         safe_zone_positions = [
                             [-1, 1],  # Top-left corner
                             [-1, -1],  # Bottom-left corner
@@ -210,7 +210,7 @@ class Scenario(BaseScenario):
     # return all adversarial agents
     def adversaries(self, world):
         return [agent for agent in world.agents if agent.adversary]
-    
+
     def safezones(self, world):
         return [landmark for landmark in world.landmarks if not landmark.tree]
 
@@ -272,13 +272,13 @@ class Scenario(BaseScenario):
         """
         if agent.saved:
             return 0
-    
+
         reward = 0
         shape = True
-    
+
         # Penalize for being out of bounds
         reward -= self.bound(agent.state.p_pos)
-    
+
         return reward
 
     def adversary_reward(self, agent, world):
@@ -326,7 +326,7 @@ class Scenario(BaseScenario):
 
 
 
-    
+
     def is_blocked_by_obstacle(self, agent1, agent2, world):
         """
         Check if the line of sight between two agents is blocked by any obstacle.
@@ -401,7 +401,7 @@ class Scenario(BaseScenario):
         observation_data = np.concatenate(
             [agent.state.p_vel] + [agent.state.p_pos] + entity_pos + other_pos + other_vel
         )
-        
+
         random_data_size = 5  # for example, appending 5 random values
         random_data = np.random.rand(random_data_size)
         # Append random data to observation

@@ -37,5 +37,3 @@ def train(env_fn, steps: int = 100, seed = 0, **env_kwargs):
     print(f"Finished training on {str(env.unwrapped.metadata['name'])}.")
 
     env.close()
-    
-    
