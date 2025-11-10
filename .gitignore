@@ -58,3 +58,5 @@ wandb/
 
 # Python version
 .python-version
+
+search_rescue_logs/
