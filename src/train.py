@@ -1,5 +1,5 @@
 import supersuit as ss
-from sar_env_updated import parallel_env
+from sar_env import parallel_env
 from stable_baselines3 import PPO
 import time
 from sb3_contrib import RecurrentPPO

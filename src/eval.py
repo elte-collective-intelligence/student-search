@@ -4,7 +4,7 @@ import os
 import time
 import numpy as np
 import time
-from sar_env_updated import env as env_f
+from sar_env import env as env_f
 from sb3_contrib import RecurrentPPO
 
 

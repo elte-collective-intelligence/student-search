@@ -1,26 +1,11 @@
-from pettingzoo.mpe._mpe_utils.simple_env import make_env
-
-from sar_env_updated import make_env, raw_env, parallel_wrapper_fn, parallel_env, env
-from pettingzoo.test import parallel_api_test
-import supersuit as ss
-
 import hydra
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig
 
-import glob
-import os
-import time
-import numpy as np
-import time
-from eval_updated import eval
-import supersuit as ss
-from stable_baselines3 import PPO
-from stable_baselines3.ppo import CnnPolicy, MlpPolicy
-
-from train_updated import train
+from eval import eval
+from train import train
 
 
-@hydra.main(version_base=None, config_path="conf", config_name="config")
+@hydra.main(version_base=None, config_path="../conf", config_name="config")
 def main(cfg: DictConfig):
     assert (
         cfg.train.active ^ cfg.eval.active
