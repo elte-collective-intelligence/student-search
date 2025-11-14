@@ -2,24 +2,28 @@ from stable_baselines3 import PPO
 import glob
 import os
 import time
-import numpy as np
-import time
 from sar_env import env as env_f
-from sb3_contrib import RecurrentPPO
 
 
-def eval(env_fn, num_games: int = 100, save_folder : str = "search_rescue_logs/", render_mode = None, **env_kwargs):
+def eval(
+    env_fn,
+    num_games: int = 100,
+    save_folder: str = "search_rescue_logs/",
+    render_mode=None,
+    **env_kwargs,
+):
     # Evaluate a trained agent vs a random agent
-
 
     env = env_f(render_mode=render_mode, **env_kwargs)
     print(
-        f"\nStarting evaluation on {str(env.metadata['name'])} (num_games={num_games}, render_mode={render_mode})"
+        f"\nStarting evaluation on {str(env.metadata['name'])} "
+        f"(num_games={num_games}, render_mode={render_mode})"
     )
 
     # Add option to manually specify policy name
     manual_policy_name = input(
-        "Enter the policy name (e.g., policy_name.zip) or press Enter to load the latest: "
+        "Enter the policy name (e.g., policy_name.zip) "
+        "or press Enter to load the latest: "
     ).strip()
 
     try:
@@ -47,8 +51,10 @@ def eval(env_fn, num_games: int = 100, save_folder : str = "search_rescue_logs/"
 
     rewards = {agent: 0 for agent in env.possible_agents}
 
-    # Note: we evaluate here using an AEC environments, to allow for easy A/B testing against random policies
-    # For example, we can see here that using a random agent for archer_0 results in less points than the trained agent
+    # Note: we evaluate here using an AEC environments,
+    # to allow for easy A/B testing against random policies
+    # For example, we can see here that using a random agent
+    # for archer_0 results in less points than the trained agent
     for i in range(num_games):
         env.reset(seed=i)
         env.action_space(env.possible_agents[0]).seed(i)
@@ -57,8 +63,8 @@ def eval(env_fn, num_games: int = 100, save_folder : str = "search_rescue_logs/"
             obs, reward, termination, truncation, info = env.last()
             # if agent == 'agent_0':
             #     obs=np.append(obs, [0,0])
-            #print(obs)
-            if render_mode== 'human':
+            # print(obs)
+            if render_mode == "human":
                 time.sleep(0.01)
             for agent in env.agents:
                 rewards[agent] += env.rewards[agent]
