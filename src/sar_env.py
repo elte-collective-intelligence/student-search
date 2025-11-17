@@ -10,14 +10,13 @@ from pettingzoo.mpe._mpe_utils.simple_env import SimpleEnv, make_env
 from pettingzoo.utils.conversions import parallel_wrapper_fn
 
 
-
 class raw_env(SimpleEnv, EzPickle):
     def __init__(
         self,
         num_missing=1,
         num_rescuers=3,
         num_trees=5,
-        num_safezones = 4,
+        num_safezones=4,
         max_cycles=25,
         continuous_actions=False,
         render_mode=None,
@@ -33,7 +32,14 @@ class raw_env(SimpleEnv, EzPickle):
             render_mode=render_mode,
         )
         scenario = Scenario()
-        world = scenario.make_world(num_missing, num_rescuers, num_trees, num_safezones)
+
+        world = scenario.make_world(
+            num_missing=num_missing,
+            num_rescuers=num_rescuers,
+            num_trees=num_trees,
+            num_safezones=num_safezones,
+        )
+
         SimpleEnv.__init__(
             self,
             scenario=scenario,
@@ -49,22 +55,25 @@ env = make_env(raw_env)
 parallel_env = parallel_wrapper_fn(env)
 
 
-
-
-
 class Scenario(BaseScenario):
     def __init__(self) -> None:
         super().__init__()
         self.vision = 15
 
-    def make_world(self, num_missing=1, num_rescuers=3, num_trees=5, num_safezones=4):
+    def make_world(
+        self,
+        num_missing=1,
+        num_rescuers=3,
+        num_trees=5,
+        num_safezones=4,
+    ):
         victim_types = ["A", "B", "C", "D"]  # Example types for victims
         safe_zone_types = ["A", "B", "C", "D"]  # Matching types for safe zones
         type_colors = {
-        "A": np.array([1.0, 0.0, 0.0]),  # Red
-        "B": np.array([0.0, 1.0, 0.0]),  # Green
-        "C": np.array([0.0, 0.0, 1.0]),  # Blue
-        "D": np.array([1.0, 1.0, 0.0])   # Yellow
+            "A": np.array([1.0, 0.0, 0.0]),  # Red
+            "B": np.array([0.0, 1.0, 0.0]),  # Green
+            "C": np.array([0.0, 0.0, 1.0]),  # Blue
+            "D": np.array([1.0, 1.0, 0.0]),  # Yellow
         }
         world = World()
         # set any world properties first
@@ -77,7 +86,7 @@ class Scenario(BaseScenario):
         num_landmarks = num_trees + num_safezones
 
         # Add agents
-        world.agents = [Agent() for i in range(num_agents)]
+        world.agents = [Agent() for _ in range(num_agents)]
         for i, agent in enumerate(world.agents):
             agent.adversary = True if i < num_rescuers else False
             agent.saved = False  # New attribute to mark saved agents
@@ -105,29 +114,32 @@ class Scenario(BaseScenario):
         for i, agent in enumerate(world.agents):
             if not agent.adversary:  # Only for victims
                 agent.type = victim_types[i % len(victim_types)]
-                agent.color = type_colors[agent.type]  # Assign the corresponding color
+                # Assign the corresponding color
+                agent.color = type_colors[agent.type]
         # Assign safe zone types
         for i, landmark in enumerate(world.landmarks):
             if not landmark.tree:  # Only for safe zones
                 landmark.type = safe_zone_types[i % len(safe_zone_types)]
-                landmark.color = type_colors[landmark.type]  # Assign the corresponding color
+                landmark.color = type_colors[
+                    landmark.type
+                ]  # Assign the corresponding color
 
         return world
 
     def reset_world(self, world, np_random, reset_landmarks=True):
         type_colors = {
-        "A": np.array([1.0, 0.0, 0.0]),  # Red
-        "B": np.array([0.0, 1.0, 0.0]),  # Green
-        "C": np.array([0.0, 0.0, 1.0]),  # Blue
-        "D": np.array([1.0, 1.0, 0.0])   # Yellow
+            "A": np.array([1.0, 0.0, 0.0]),  # Red
+            "B": np.array([0.0, 1.0, 0.0]),  # Green
+            "C": np.array([0.0, 0.0, 1.0]),  # Blue
+            "D": np.array([1.0, 1.0, 0.0]),  # Yellow
         }
 
         safe_zone_positions = [
-                            [-1, 1],  # Top-left corner
-                            [-1, -1],  # Bottom-left corner
-                            [1, 1],   # Top-right corner
-                            [1, -1]   # Bottom-right corner
-                            ]
+            [-1, 1],  # Top-left corner
+            [-1, -1],  # Bottom-left corner
+            [1, 1],  # Top-right corner
+            [1, -1],  # Bottom-right corner
+        ]
         # random properties for agents
         for i, agent in enumerate(world.agents):
             agent.color = (
@@ -137,7 +149,7 @@ class Scenario(BaseScenario):
             )
             # random properties for landmarks
         for i, landmark in enumerate(world.landmarks):
-            landmark.color =(
+            landmark.color = (
                 type_colors[landmark.type]
                 if not landmark.tree
                 else np.array([0.35, 0.85, 0.35])
@@ -152,12 +164,14 @@ class Scenario(BaseScenario):
             for i, landmark in enumerate(world.landmarks):
                 if not landmark.boundary:
                     if landmark.tree:
-                        landmark.state.p_pos = np_random.uniform(-0.8, +0.8, world.dim_p)
+                        landmark.state.p_pos = np_random.uniform(
+                            -0.8, +0.8, world.dim_p
+                        )
                         landmark.state.p_vel = np.zeros(world.dim_p)
                     else:
                         landmark.state.p_pos = safe_zone_positions[j]
                         landmark.state.p_vel = np.zeros(world.dim_p)
-                        j+=1
+                        j += 1
 
         self.log_rescue_status(world)
 
@@ -191,13 +205,11 @@ class Scenario(BaseScenario):
 
         self.log_rescue_status(world)
 
-
     # return all agents that are not adversaries
     def good_agents(self, world):
         return [agent for agent in world.agents if not agent.adversary]
 
-
-    def is_victim_rescued(self, agent1, safezone, rescue_radius = 0.1):
+    def is_victim_rescued(self, agent1, safezone, rescue_radius=0.1):
         delta_pos = agent1.state.p_pos - safezone.state.p_pos
         dist = np.sqrt(np.sum(np.square(delta_pos)))
         dist_min = agent1.size + safezone.size
@@ -237,13 +249,14 @@ class Scenario(BaseScenario):
         # Check if the victim is within the rescue radius of the safe zone
         if dist < rescue_radius:
             victim.saved = True  # Mark the victim as saved
-            victim.state.p_vel = np.zeros_like(victim.state.p_vel)  # Stop the victim
+
+            # Stop the victim
+            victim.state.p_vel = np.zeros_like(victim.state.p_vel)
+
             print(f"Victim {victim.name} is saved at Safe Zone {safe_zone.name}!")
             return True
 
         return False
-
-
 
     def bound(self, pos):
         penalty = 0
@@ -253,7 +266,8 @@ class Scenario(BaseScenario):
 
         # Check x-coordinate
         if pos[0] < x_min:
-            penalty += (x_min - pos[0]) * 10  # Greater penalty for being further out
+            # Greater penalty for being further out
+            penalty += (x_min - pos[0]) * 10
         elif pos[0] > x_max:
             penalty += (pos[0] - x_max) * 10
 
@@ -274,7 +288,6 @@ class Scenario(BaseScenario):
             return 0
 
         reward = 0
-        shape = True
 
         # Penalize for being out of bounds
         reward -= self.bound(agent.state.p_pos)
@@ -288,21 +301,33 @@ class Scenario(BaseScenario):
         """
         reward = 0
         shape = True
-        victims = [v for v in self.good_agents(world) if not v.saved]  # Only unsaved victims
+        victims = [
+            v for v in self.good_agents(world) if not v.saved
+        ]  # Only unsaved victims
         safezones = self.safezones(world)
 
         # Reward shaping: Encourage rescuers to get closer to victims
         if shape:
             for victim in victims:
                 # Penalize rescuers for being far from the victim
-                distance_to_victim = np.linalg.norm(agent.state.p_pos - victim.state.p_pos)
-                reward -= distance_to_victim * 0.1  # Penalize distance from victim
+                distance_to_victim = np.linalg.norm(
+                    agent.state.p_pos - victim.state.p_pos
+                )
+
+                # Penalize distance from victim
+                reward -= distance_to_victim * 0.1
 
                 # Reward for guiding the victim closer to a matching safe zone
-                matching_safezone = next((sz for sz in safezones if sz.type == victim.type), None)
+                matching_safezone = next(
+                    (sz for sz in safezones if sz.type == victim.type), None
+                )
                 if matching_safezone:
-                    distance_to_safezone = np.linalg.norm(victim.state.p_pos - matching_safezone.state.p_pos)
-                    reward += 1.0 / (1 + distance_to_safezone)  # Reward for reducing distance
+                    distance_to_safezone = np.linalg.norm(
+                        victim.state.p_pos - matching_safezone.state.p_pos
+                    )
+                    reward += 1.0 / (
+                        1 + distance_to_safezone
+                    )  # Reward for reducing distance
 
                     # Bonus for successfully delegating the victim
                     if self.is_correctly_delegated(victim, matching_safezone):
@@ -319,21 +344,23 @@ class Scenario(BaseScenario):
 
         return reward
 
-
     def log_rescue_status(self, world):
         saved_agents = sum(1 for agent in self.good_agents(world) if agent.saved)
         print(f"Saved agents: {saved_agents}/{len(self.good_agents(world))}")
-
-
-
 
     def is_blocked_by_obstacle(self, agent1, agent2, world):
         """
         Check if the line of sight between two agents is blocked by any obstacle.
         """
         for obstacle in world.landmarks:
-            if obstacle.collide:  # Only consider obstacles that can block line of sight
-                if self.line_intersects_circle(agent1.state.p_pos, agent2.state.p_pos, obstacle.state.p_pos, obstacle.size):
+            if obstacle.collide:
+                # Only consider obstacles that can block line of sight
+                if self.line_intersects_circle(
+                    agent1.state.p_pos,
+                    agent2.state.p_pos,
+                    obstacle.state.p_pos,
+                    obstacle.size,
+                ):
                     return True
         return False
 
@@ -391,7 +418,11 @@ class Scenario(BaseScenario):
         other_pos = []
         other_vel = []
         for other in world.agents:
-            if other is agent or self.is_blocked_by_obstacle(agent, other, world) or self.get_distance(agent, other) <= self.vision:
+            if (
+                other is agent
+                or self.is_blocked_by_obstacle(agent, other, world)
+                or self.get_distance(agent, other) <= self.vision
+            ):
                 other_pos.append(np.array([1e6, 1e6]))
             else:
                 other_pos.append(other.state.p_pos - agent.state.p_pos)
@@ -399,13 +430,11 @@ class Scenario(BaseScenario):
                 other_vel.append(other.state.p_vel)
 
         observation_data = np.concatenate(
-            [agent.state.p_vel] + [agent.state.p_pos] + entity_pos + other_pos + other_vel
+            [agent.state.p_vel]
+            + [agent.state.p_pos]
+            + entity_pos
+            + other_pos
+            + other_vel
         )
-
-        random_data_size = 5  # for example, appending 5 random values
-        random_data = np.random.rand(random_data_size)
-        # Append random data to observation
-        # observation_data = np.concatenate([observation_data, random_data])
-        # print(f"Shape : {observation_data.shape}")
 
         return observation_data

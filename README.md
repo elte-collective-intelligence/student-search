@@ -4,6 +4,7 @@
 [![Docker](https://github.com/elte-collective-intelligence/student-search/actions/workflows/docker.yml/badge.svg)](https://github.com/elte-collective-intelligence/student-search/actions/workflows/docker.yml)
 [![codecov](https://codecov.io/gh/elte-collective-intelligence/student-search/branch/main/graph/badge.svg)](https://codecov.io/gh/elte-collective-intelligence/student-search)
 [![License: CC BY-NC-ND 4.0](https://img.shields.io/badge/License-CC--BY--NC--ND%204.0-blue.svg)](LICENSE)
+[![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 
 This project simulates a multi-agent search-and-rescue mission using the PettingZoo MPE framework. Rescuers (adversaries) must guide victims to designated safe zones, navigating around obstacles and using cooperative intelligence to accomplish the task.
 
@@ -75,6 +76,14 @@ python main.py eval=true
 ```
 
  ![Run with 1 missing agent](images/Rescue1.mp4)
+
+## Development
+
+To contribute or modify the project, ensure you follow the code style guidelines enforced by pre-commit hooks. Install pre-commit and run:
+
+```bash
+pre-commit install
+```
 
 ## Team Members
 
