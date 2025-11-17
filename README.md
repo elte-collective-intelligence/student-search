@@ -77,6 +77,14 @@ python main.py eval=true
 
  ![Run with 1 missing agent](images/Rescue1.mp4)
 
+## Development
+
+To contribute or modify the project, ensure you follow the code style guidelines enforced by pre-commit hooks. Install pre-commit and run:
+
+```bash
+pre-commit install
+```
+
 ## Team Members
 
 Jakab Etele, jangbo@inf.elte.hu​
