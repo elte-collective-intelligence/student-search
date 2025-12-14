@@ -51,11 +51,8 @@ def main(cfg: DictConfig):
         "continuous_actions": cfg.env.continuous_actions,
     }
 
-    env_fn = "search_and_rescue"
-
     if cfg.train.active:
         train(
-            env_fn,
             steps=cfg.train.total_timesteps,
             seed=cfg.train.seed,
             render_mode=cfg.train.render_mode,
@@ -64,7 +61,6 @@ def main(cfg: DictConfig):
         )
     elif cfg.eval.active:
         eval(
-            env_fn,
             num_games=cfg.eval.games,
             render_mode=cfg.eval.render_mode,
             save_folder=cfg.save_folder,

@@ -70,7 +70,6 @@ def make_actor(env, device="cpu"):
 
 
 def eval(
-    env_fn,
     num_games: int = 100,
     save_folder: str = "search_rescue_logs/",
     render_mode=None,
@@ -221,15 +220,3 @@ def visualize_random(env_kwargs, num_steps=500):
             td = env.reset()
 
     env.close()
-
-
-if __name__ == "__main__":
-    # Quick test
-    env_kwargs = {
-        "num_missing": 4,
-        "num_rescuers": 3,
-        "num_trees": 8,
-        "num_safezones": 4,
-        "max_cycles": 120,
-    }
-    visualize_random(env_kwargs, num_steps=200)

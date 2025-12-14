@@ -121,11 +121,9 @@ def make_ppo_models(env, device="cpu"):
 
 
 def train(
-    env_fn,
     steps: int = 100000,
     seed: int = 0,
     save_folder: str = "search_rescue_logs/",
-    render_mode=None,
     **env_kwargs,
 ):
     """Train a PPO agent on the search and rescue environment."""
