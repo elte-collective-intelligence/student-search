@@ -4,18 +4,16 @@ Training script using TorchRL with PPO.
 
 import time
 import torch
-from tensordict.nn import TensorDictModule
-from torch import nn
 from torchrl.collectors import SyncDataCollector
 from torchrl.envs import TransformedEnv, Compose, DoubleToFloat, StepCounter
 from torchrl.envs.utils import check_env_specs
-from torchrl.modules import ProbabilisticActor, ValueOperator, TanhNormal
 from torchrl.objectives import ClipPPOLoss
 from torchrl.objectives.value import GAE
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
 from sar_env import SearchAndRescueEnv
+from models import make_ppo_models
 
 
 def make_env(env_kwargs, device="cpu"):
@@ -29,95 +27,6 @@ def make_env(env_kwargs, device="cpu"):
         ),
     )
     return env
-
-
-def make_ppo_models(env, device="cpu"):
-    """Create actor and critic networks for PPO."""
-    # Get dimensions
-    obs_dim = env.observation_spec["observation"].shape[-1]
-    action_spec = env.action_spec
-
-    # Determine if continuous or discrete actions
-    is_continuous = hasattr(action_spec, "low")
-
-    if is_continuous:
-        action_dim = action_spec.shape[-1]
-
-        # Actor network (continuous)
-        actor_net = nn.Sequential(
-            nn.Linear(obs_dim, 256),
-            nn.Tanh(),
-            nn.Linear(256, 256),
-            nn.Tanh(),
-            nn.Linear(256, 2 * action_dim),  # mean and std
-        )
-
-        actor_module = TensorDictModule(
-            actor_net,
-            in_keys=["observation"],
-            out_keys=["loc", "scale"],
-        )
-
-        actor = ProbabilisticActor(
-            module=actor_module,
-            spec=action_spec,
-            in_keys=["loc", "scale"],
-            out_keys=["action"],
-            distribution_class=TanhNormal,
-            distribution_kwargs={
-                "low": action_spec.space.low,
-                "high": action_spec.space.high,
-            },
-            return_log_prob=True,
-        )
-    else:
-        # Discrete actions
-        n_actions = action_spec.space.n
-
-        # Actor network (discrete)
-        actor_net = nn.Sequential(
-            nn.Linear(obs_dim, 256),
-            nn.Tanh(),
-            nn.Linear(256, 256),
-            nn.Tanh(),
-            nn.Linear(256, n_actions),
-        )
-
-        actor_module = TensorDictModule(
-            actor_net,
-            in_keys=["observation"],
-            out_keys=["logits"],
-        )
-
-        actor = ProbabilisticActor(
-            module=actor_module,
-            spec=action_spec,
-            in_keys=["logits"],
-            out_keys=["action"],
-            distribution_class=torch.distributions.Categorical,
-            return_log_prob=True,
-        )
-
-    # Critic network (same for both)
-    critic_net = nn.Sequential(
-        nn.Linear(obs_dim, 256),
-        nn.Tanh(),
-        nn.Linear(256, 256),
-        nn.Tanh(),
-        nn.Linear(256, 1),
-    )
-
-    critic = ValueOperator(
-        module=critic_net,
-        in_keys=["observation"],
-        out_keys=["state_value"],
-    )
-
-    # Move to device
-    actor = actor.to(device)
-    critic = critic.to(device)
-
-    return actor, critic
 
 
 def train(

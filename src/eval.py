@@ -7,66 +7,9 @@ import glob
 import os
 import time
 import torch
-from tensordict.nn import TensorDictModule
-from torch import nn
-from torchrl.modules import ProbabilisticActor
 
 from sar_env import SearchAndRescueEnv
-
-
-def make_actor(env, device="cpu"):
-    """Create actor network matching training architecture."""
-    obs_dim = env.observation_spec["observation"].shape[-1]
-    action_spec = env.action_spec
-
-    is_continuous = hasattr(action_spec, "low")
-
-    if is_continuous:
-        action_dim = action_spec.shape[-1]
-        actor_net = nn.Sequential(
-            nn.Linear(obs_dim, 256),
-            nn.Tanh(),
-            nn.Linear(256, 256),
-            nn.Tanh(),
-            nn.Linear(256, 2 * action_dim),
-        )
-        actor_module = TensorDictModule(
-            actor_net,
-            in_keys=["observation"],
-            out_keys=["loc", "scale"],
-        )
-        actor = ProbabilisticActor(
-            module=actor_module,
-            spec=action_spec,
-            in_keys=["loc", "scale"],
-            out_keys=["action"],
-            distribution_class=torch.distributions.Normal,
-            return_log_prob=False,
-        )
-    else:
-        n_actions = action_spec.space.n
-        actor_net = nn.Sequential(
-            nn.Linear(obs_dim, 256),
-            nn.Tanh(),
-            nn.Linear(256, 256),
-            nn.Tanh(),
-            nn.Linear(256, n_actions),
-        )
-        actor_module = TensorDictModule(
-            actor_net,
-            in_keys=["observation"],
-            out_keys=["logits"],
-        )
-        actor = ProbabilisticActor(
-            module=actor_module,
-            spec=action_spec,
-            in_keys=["logits"],
-            out_keys=["action"],
-            distribution_class=torch.distributions.Categorical,
-            return_log_prob=False,
-        )
-
-    return actor.to(device)
+from models import make_actor
 
 
 def eval(
@@ -77,7 +20,7 @@ def eval(
 ):
     """Evaluate a trained agent with visualization support."""
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # Create environment with rendering
     env = SearchAndRescueEnv(render_mode=render_mode, **env_kwargs)
@@ -87,8 +30,8 @@ def eval(
         f"(num_games={num_games}, render_mode={render_mode})"
     )
 
-    # Create actor for loading weights
-    actor = make_actor(env, device=device)
+    # Create actor for loading weights (no log prob needed for eval)
+    actor = make_actor(env, device=device, return_log_prob=False)
 
     # Option to manually specify policy name
     manual_policy_name = input(
@@ -105,7 +48,7 @@ def eval(
             else:
                 print(f"Policy '{manual_policy_name}' not found.")
                 env.close()
-                return
+                return None
         else:
             # Find latest policy
             pattern = f"{save_folder}/{env.metadata['name']}*.pt"
@@ -142,7 +85,7 @@ def eval(
             if actor is not None:
                 with torch.no_grad():
                     td = actor(td)
-                action = td["action"]
+                # action = td["action"]
             else:
                 # Random action
                 action = torch.tensor(
