@@ -1,13 +1,13 @@
 env:
-  missing: 1
-  rescuers: 3
+  missing: 4
+  rescuers: 10
   trees: 8
-  safezones: 4
+  safe_zones: 4
   max_cycles: 120
   continuous_actions: false
 train:
   active: false
-  total_timesteps: 1000000
+  total_timesteps: 4000000
   eval_freq: 1000
   batch_size: 256
   n_epochs: 40
@@ -18,3 +18,6 @@ eval:
   games: 10
   render_mode: "human"
 save_folder: "search_rescue_logs/"
+tensorboard:
+  active: false
+  port: 6006

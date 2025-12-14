@@ -1,3 +1,7 @@
+"""
+Main entry point for Search and Rescue training and evaluation.
+"""
+
 import hydra
 from omegaconf import DictConfig
 
@@ -10,15 +14,18 @@ def main(cfg: DictConfig):
     assert (
         cfg.train.active ^ cfg.eval.active
     ), "Please specify one of train.active=true or eval.active=true in the arguments."
+
     env_kwargs = {
         "num_missing": cfg.env.missing,
         "num_rescuers": cfg.env.rescuers,
         "num_trees": cfg.env.trees,
-        "num_safezones": cfg.env.safezones,
+        "num_safe_zones": cfg.env.safe_zones,
         "max_cycles": cfg.env.max_cycles,
         "continuous_actions": cfg.env.continuous_actions,
     }
+
     env_fn = "search_and_rescue"
+
     if cfg.train.active:
         train(
             env_fn,

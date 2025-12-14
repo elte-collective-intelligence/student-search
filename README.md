@@ -12,7 +12,7 @@ This project simulates a multi-agent search-and-rescue mission using the Petting
 
 ### Prerequisites
 
-Ensure you have Python 3.10 installed and necessary packages for running PettingZoo and reinforcement learning frameworks.
+Ensure you have Python 3.13 installed and necessary packages for running PettingZoo and reinforcement learning frameworks.
 
 ### Installation
 
@@ -87,11 +87,11 @@ pre-commit install
 
 ## Team Members
 
-Jakab Etele, jangbo@inf.elte.hu​
+Adorján Nagy-Mohos, d5vd5e@inf.elte.hu
 
-Szarka Marcell, dia4sw@inf.elte.hu​
+Máté Kovács, u5bky4@inf.elte.hu
 
-Pánczél Patrik, mbhr3h@inf.elte.hu
+Sándor Baranyi, ct9xfj@inf.elte.hu
 
 ## License
 
