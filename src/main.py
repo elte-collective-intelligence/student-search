@@ -7,7 +7,7 @@ import subprocess
 import hydra
 from omegaconf import DictConfig
 
-from eval import eval
+from eval import evaluate
 from train import train
 
 
@@ -60,7 +60,7 @@ def main(cfg: DictConfig):
             **env_kwargs,
         )
     elif cfg.eval.active:
-        eval(
+        evaluate(
             num_games=cfg.eval.games,
             render_mode=cfg.eval.render_mode,
             save_folder=cfg.save_folder,

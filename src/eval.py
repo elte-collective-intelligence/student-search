@@ -6,13 +6,15 @@ Supports visualization and testing trained models.
 import glob
 import os
 import time
+
 import torch
 
 from sar_env import SearchAndRescueEnv
 from models import make_actor
+from metrics import EpisodeTracker, aggregate_logs, compute_summary, plot_core_metrics
 
 
-def eval(
+def evaluate(
     num_games: int = 100,
     save_folder: str = "search_rescue_logs/",
     render_mode=None,
@@ -24,9 +26,10 @@ def eval(
 
     # Create environment with rendering
     env = SearchAndRescueEnv(render_mode=render_mode, **env_kwargs)
+    env_name = getattr(env, "env_id", type(env).__name__)
 
     print(
-        f"\nStarting evaluation on {env.metadata['name']} "
+        f"\nStarting evaluation on {env_name} "
         f"(num_games={num_games}, render_mode={render_mode})"
     )
 
@@ -51,7 +54,7 @@ def eval(
                 return None
         else:
             # Find latest policy
-            pattern = f"{save_folder}/{env.metadata['name']}*.pt"
+            pattern = f"{save_folder}/{env_name}*.pt"
             policies = glob.glob(pattern)
             if not policies:
                 print(f"No policies found matching {pattern}")
@@ -70,8 +73,10 @@ def eval(
     # Evaluation loop
     total_rewards = []
     total_rescues = []
+    episode_logs = []
 
     for game in range(num_games):
+        tracker = EpisodeTracker(game + 1)
         td = env.reset()
         game_reward = 0.0
 
@@ -81,15 +86,21 @@ def eval(
                 env.render()
                 time.sleep(0.05)  # Slow down for visualization
 
-            # Get action
-            if actor is not None:
+            current_actor = actor
+            if current_actor is not None:
+                actor_core = current_actor.get_submodule("actor")
                 with torch.no_grad():
-                    td = actor(td)
-                # action = td["action"]
+                    out = actor_core(td)
+
+                # ensure action ends up in td
+                if isinstance(out, dict) or hasattr(out, "get"):
+                    td = out
+                else:
+                    td["action"] = out
             else:
                 # Random action
                 action = torch.tensor(
-                    env._np_random.randint(0, 5),
+                    env.sample_discrete_action(),
                     dtype=torch.int64,
                     device=device,
                 )
@@ -103,6 +114,7 @@ def eval(
             done = td["next", "done"].item()
 
             game_reward += reward
+            tracker.record(env, reward)
 
             if done:
                 break
@@ -111,9 +123,11 @@ def eval(
             td = td["next"].clone()
 
         # Count rescued victims
-        rescued = sum(1 for v in env.victims if v.saved)
+        log = tracker.finalize(env)
+        rescued = log.rescues
         total_rescues.append(rescued)
         total_rewards.append(game_reward)
+        episode_logs.append(log)
 
         print(
             f"Game {game + 1}/{num_games}: "
@@ -127,10 +141,23 @@ def eval(
     avg_reward = sum(total_rewards) / len(total_rewards)
     avg_rescues = sum(total_rescues) / len(total_rescues)
 
+    df = aggregate_logs(episode_logs)
+    summary = compute_summary(df, len(env.victims))
+    plots = plot_core_metrics(df, os.path.join(save_folder, "plots"))
+
     print("\n" + "=" * 50)
     print("Evaluation Results:")
     print(f"  Average reward: {avg_reward:.2f}")
     print(f"  Average rescues: {avg_rescues:.2f}/{len(env.victims)}")
+    print(f"  Rescues completed: {summary['rescues_pct']:.1f}%")
+    print(f"  Average collisions: {summary['avg_collisions']:.2f}")
+    print(f"  Average coverage cells: {summary['avg_coverage_cells']:.2f}")
+    print(
+        f"  Avg time to first rescue: {summary['avg_time_to_first_rescue']:.2f} steps"
+    )
+    print("  Plots saved:")
+    for label, path in plots.items():
+        print(f"    {label}: {path}")
     print(f"  Total games: {num_games}")
     print("=" * 50)
 
@@ -151,7 +178,7 @@ def visualize_random(env_kwargs, num_steps=500):
 
         # Random action
         action = torch.tensor(
-            env._np_random.randint(0, 5),
+            env.sample_discrete_action(),
             dtype=torch.int64,
         )
         td["action"] = action

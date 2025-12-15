@@ -30,6 +30,7 @@ class Agent:
         self.type = None  # Victim type (A, B, C, D)
         self.color = np.array([0.0, 0.0, 0.0])
         # State
+        self.action_u = np.zeros(2)
         self.p_pos = np.zeros(2)  # Position
         self.p_vel = np.zeros(2)  # Velocity
         self.c = np.zeros(2)  # Communication
@@ -192,7 +193,7 @@ class SearchAndRescueEnv(EnvBase):
         """Define observation and action specs."""
         # Calculate observation size
         # For each agent: own velocity (2) + own position (2) +
-        # closest N landmarks (N*2) + other agents positions (num_agents-1)*2 +
+        # the closest N landmarks (N*2) + other agents positions (num_agents-1)*2 +
         # victim velocities (num_missing*2)
         n_closest_landmarks = 3
         obs_size = (
@@ -271,7 +272,7 @@ class SearchAndRescueEnv(EnvBase):
         else:
             self._np_random = np.random.RandomState()
 
-    def _reset(self, tensordict: Optional[TensorDict] = None) -> TensorDict:
+    def _reset(self, tensordict: Optional[TensorDict] = None, **kwargs) -> TensorDict:
         """Reset the environment."""
         self._step_count = 0
 
@@ -414,7 +415,7 @@ class SearchAndRescueEnv(EnvBase):
         u *= sensitivity
 
         # Store action in agent
-        agent._action_u = u
+        agent.action_u = u
 
     def _world_step(self):
         """Execute physics step for all entities."""
@@ -422,7 +423,7 @@ class SearchAndRescueEnv(EnvBase):
         for agent in self.agents:
             if hasattr(agent, "_action_u"):
                 # Apply action force
-                agent.p_vel += agent._action_u * self.dt
+                agent.p_vel += agent.action_u * self.dt
 
                 # Apply damping
                 agent.p_vel *= 1 - self.damping
@@ -736,6 +737,19 @@ class SearchAndRescueEnv(EnvBase):
         if self.screen is not None:
             pygame.quit()
             self.screen = None
+
+    # ---- Public helpers (avoid protected-member access from outside) ----
+    def is_collision(self, entity_a, entity_b) -> bool:
+        """Public wrapper for collision check."""
+        return self._is_collision(entity_a, entity_b)
+
+    def bound_penalty(self, pos: np.ndarray) -> float:
+        """Public wrapper for boundary penalty."""
+        return self._bound_penalty(pos)
+
+    def sample_discrete_action(self) -> int:
+        """Sample a discrete action using the environment RNG."""
+        return int(self._np_random.randint(0, 5))
 
 
 # Factory functions for compatibility
