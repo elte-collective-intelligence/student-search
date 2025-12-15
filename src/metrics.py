@@ -78,12 +78,12 @@ class EpisodeTracker:
         if env.bound_penalty(main_rescuer.p_pos) > 0:  # noqa: SLF001
             self.log.boundary_violations += 1
 
-        current_rescues = sum(1 for v in env.victims if v.saved)
+        current_rescues = sum(1 for v in env.victims if v.is_saved)
         if self.log.time_to_first_rescue == 0 and current_rescues > 0:
             self.log.time_to_first_rescue = self.log.steps
 
     def finalize(self, env) -> EpisodeLog:
-        self.log.rescues = sum(1 for v in env.victims if v.saved)
+        self.log.rescues = sum(1 for v in env.victims if v.is_saved)
         self.log.unique_cells = len(self._visited_cells)
         if self.log.time_to_first_rescue == 0:
             self.log.time_to_first_rescue = self.log.steps
@@ -103,7 +103,7 @@ def track_episode(env, tracker: EpisodeTracker, policy_fn: PolicyFn):
         tracker.record(env, reward)
 
         if td["next", "done"].item():
-            tracker.log.rescues = sum(1 for v in env.victims if v.saved)
+            tracker.log.rescues = sum(1 for v in env.victims if v.is_saved)
             tracker.log.unique_cells = tracker.unique_cells
             if tracker.log.time_to_first_rescue == 0:
                 tracker.log.time_to_first_rescue = tracker.log.steps
@@ -147,7 +147,7 @@ def run_episode(
         if env.bound_penalty(main_rescuer.p_pos) > 0:  # noqa: SLF001
             boundary_hits += 1
 
-        current_rescues = sum(1 for v in env.victims if v.saved)
+        current_rescues = sum(1 for v in env.victims if v.is_saved)
         if time_to_first_rescue is None and current_rescues > 0:
             time_to_first_rescue = steps
 
@@ -156,7 +156,7 @@ def run_episode(
 
         td = td["next"].clone()
 
-    rescues = sum(1 for v in env.victims if v.saved)
+    rescues = sum(1 for v in env.victims if v.is_saved)
 
     return EpisodeLog(
         episode=episode_idx,

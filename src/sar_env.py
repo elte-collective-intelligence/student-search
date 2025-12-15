@@ -65,6 +65,11 @@ class Victim:
         self.p_vel = np.zeros(2)  # Velocity
         self.c = np.zeros(2)  # Communication
 
+    @property
+    def is_saved(self):
+        """Check if the victim has been saved (reached safe zone)."""
+        return self.state is VictimState.STOP
+
 
 class Landmark:
     """Landmark entity in the environment (trees or safe zones)."""
