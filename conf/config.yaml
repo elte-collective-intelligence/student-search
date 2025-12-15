@@ -1,15 +1,16 @@
 env:
-  missing: 1
-  rescuers: 3
+  missing: 4
+  rescuers: 10
   trees: 8
-  safezones: 4
-  max_cycles: 120
+  safe_zones: 4
+  max_cycles: 300
   continuous_actions: false
 train:
   active: false
-  total_timesteps: 1000000
+  algorithm: "mappo"  # "ppo" or "mappo" (CTDE)
+  total_timesteps: 4000000
   eval_freq: 1000
-  batch_size: 256
+  batch_size: 2048
   n_epochs: 40
   seed: 0
   render_mode: null
@@ -18,3 +19,6 @@ eval:
   games: 10
   render_mode: "human"
 save_folder: "search_rescue_logs/"
+tensorboard:
+  active: false
+  port: 6006

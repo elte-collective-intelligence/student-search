@@ -1,277 +1,829 @@
 # noqa: D212, D415
+"""
+Search and Rescue Environment using TorchRL.
 
+This environment simulates a search and rescue scenario where rescuers
+must guide victims to their matching safe zones while avoiding obstacles (trees).
 
+Victims are environmental entities (not agents) with three states:
+- IDLE: Waiting to be found by a rescuer
+- FOLLOW: Following the nearest rescuer within range
+- STOP: Reached a safe zone and stopped (saved)
+"""
+from __future__ import annotations
+
+from src.victim import VictimState, Victim
+from src.agent import Agent
+from src.landmark import Landmark
 import numpy as np
-from gymnasium.utils import EzPickle
+import torch
+import pygame
+from tensordict import TensorDict
+from torchrl.envs import EnvBase
+from torchrl.data import Bounded, Unbounded, Categorical, Composite
+from typing import Optional, Union
 
-from pettingzoo.mpe._mpe_utils.core import Agent, Landmark, World
-from pettingzoo.mpe._mpe_utils.scenario import BaseScenario
-from pettingzoo.mpe._mpe_utils.simple_env import SimpleEnv, make_env
-from pettingzoo.utils.conversions import parallel_wrapper_fn
 
+class SearchAndRescueEnv(EnvBase):
+    """
+    TorchRL-based Search and Rescue Environment.
 
-class raw_env(SimpleEnv, EzPickle):
+    Rescuers must guide victims to their matching safe zones (same type).
+    Trees act as obstacles that block movement and vision.
+
+    Victims are environmental entities with three states:
+    - IDLE: Waiting to be found by a rescuer
+    - FOLLOW: Following the nearest rescuer within detection range
+    - STOP: Reached matching safe zone and saved
+    """
+
+    metadata = {
+        "render_modes": ["human", "rgb_array"],
+        "render_fps": 30,
+        "name": "search_and_rescue_v2",
+    }
+
+    # Type colors for victims and safe zones
+    TYPE_COLORS = {
+        "A": np.array([1.0, 0.0, 0.0]),  # Red
+        "B": np.array([0.0, 1.0, 0.0]),  # Green
+        "C": np.array([0.0, 0.0, 1.0]),  # Blue
+        "D": np.array([1.0, 1.0, 0.0]),  # Yellow
+    }
+
+    VICTIM_TYPES = ["A", "B", "C", "D"]
+    SAFE_ZONE_TYPES = ["A", "B", "C", "D"]
+
     def __init__(
         self,
-        num_missing=1,
-        num_rescuers=3,
-        num_trees=5,
-        num_safezones=4,
-        max_cycles=25,
-        continuous_actions=False,
-        render_mode=None,
+        num_missing: int = 4,
+        num_rescuers: int = 3,
+        num_trees: int = 8,
+        num_safe_zones: int = 4,
+        max_cycles: int = 120,
+        continuous_actions: bool = False,
+        render_mode: Optional[str] = None,
+        device: str = "cpu",
+        seed: Optional[int] = None,
+        # Victim behavior parameters
+        follow_range: float = 0.3,  # Range at which victims start following
+        rescue_range: float = 0.1,  # Range at which victims are saved at safe zones
     ):
-        EzPickle.__init__(
-            self,
-            num_missing=num_missing,
-            num_rescuers=num_rescuers,
-            num_trees=num_trees,
-            num_safezones=num_safezones,
-            max_cycles=max_cycles,
-            continuous_actions=continuous_actions,
-            render_mode=render_mode,
+        super().__init__(device=device, batch_size=torch.Size([]))
+
+        self.num_missing = num_missing
+        self.num_rescuers = num_rescuers
+        self.num_trees = num_trees
+        self.num_safe_zones = num_safe_zones
+        self.max_cycles = max_cycles
+        self.continuous_actions = continuous_actions
+        self.render_mode = render_mode
+        self.vision = 1.0  # Vision range for agents
+
+        # Victim behavior parameters
+        self.follow_range = follow_range
+        self.rescue_range = rescue_range
+
+        # World dimensions
+        self.dim_p = 2  # Physical dimension (x, y)
+        self.dim_c = 2  # Communication dimension
+
+        # Physics parameters
+        self.dt = 0.1
+        self.damping = 0.25
+        self.contact_force = 1e2
+        self.contact_margin = 1e-3
+
+        # Initialize entities
+        self._create_entities()
+
+        # Rendering
+        self.screen = None
+        self.clock = None
+        self.width = 700
+        self.height = 700
+
+        # Step counter
+        self._step_count = 0
+
+        # Initialize random state
+        self._np_random = np.random.RandomState()
+
+        # Set seed if provided
+        if seed is not None:
+            self._set_seed(seed)
+
+        # Define specs
+        self._make_specs()
+
+    def _create_entities(self):
+        """Create all agents, victims, and landmarks."""
+        # Create rescuer agents
+        self.agents = []
+        for i in range(self.num_rescuers):
+            agent = Agent()
+            agent.name = f"rescuer_{i}"
+            self.agents.append(agent)
+
+        # Create victims (environmental entities, not agents)
+        self.victims = []
+        for i in range(self.num_missing):
+            victim = Victim()
+            victim.name = f"victim_{i}"
+            victim.type = self.VICTIM_TYPES[i % len(self.VICTIM_TYPES)]
+            victim.color = self.TYPE_COLORS[victim.type].copy()
+            self.victims.append(victim)
+
+        # Create landmarks (trees + safe zones)
+        self.landmarks = []
+        for i in range(self.num_trees):
+            landmark = Landmark()
+            landmark.name = f"tree_{i}"
+            landmark.tree = True
+            landmark.collide = True
+            landmark.size = 0.03
+            landmark.color = np.array([0.35, 0.85, 0.35])  # Tree color
+            self.landmarks.append(landmark)
+
+        for i in range(self.num_safe_zones):
+            landmark = Landmark()
+            landmark.name = f"safe_zone_{i}"
+            landmark.tree = False
+            landmark.collide = False
+            landmark.size = 0.1
+            landmark.type = self.SAFE_ZONE_TYPES[i % len(self.SAFE_ZONE_TYPES)]
+            landmark.color = self.TYPE_COLORS[landmark.type].copy()
+            self.landmarks.append(landmark)
+
+        # Agent names for compatibility
+        self.possible_agents = [a.name for a in self.agents]
+        self.agent_name_mapping = {a.name: i for i, a in enumerate(self.agents)}
+
+    def _make_specs(self):
+        """Define observation and action specs."""
+        # Observation components (per-agent, partial observability):
+        # - own velocity (2)
+        # - own position (2)
+        # - closest N landmarks relative positions (N*2)
+        # - other rescuers relative positions (num_rescuers-1)*2
+        # - victims relative positions + state (num_missing * 3) [x, y, state]
+        self.n_closest_landmarks = 3
+        obs_size = (
+            2  # own velocity
+            + 2  # own position
+            + self.n_closest_landmarks * 2  # closest landmark positions
+            + (self.num_rescuers - 1) * 2  # other rescuer positions
+            + self.num_missing * 3  # victim positions + state
         )
-        scenario = Scenario()
 
-        world = scenario.make_world(
-            num_missing=num_missing,
-            num_rescuers=num_rescuers,
-            num_trees=num_trees,
-            num_safezones=num_safezones,
+        # Global state components (for CTDE critic - full observability):
+        # - all rescuer positions: num_rescuers * 2
+        # - all rescuer velocities: num_rescuers * 2
+        # - all victim positions: num_missing * 2
+        # - all victim states: num_missing * 1
+        # - all tree positions: num_trees * 2
+        # - all safe zone positions: num_safe_zones * 2
+        self.global_state_size = (
+            self.num_rescuers * 2  # all rescuer positions
+            + self.num_rescuers * 2  # all rescuer velocities
+            + self.num_missing * 2  # all victim positions
+            + self.num_missing * 1  # all victim states
+            + self.num_trees * 2  # all tree positions
+            + self.num_safe_zones * 2  # all safe zone positions
         )
 
-        SimpleEnv.__init__(
-            self,
-            scenario=scenario,
-            world=world,
-            render_mode=render_mode,
-            max_cycles=max_cycles,
-            continuous_actions=continuous_actions,
+        # Visibility mask sizes
+        vis_mask_rescuers_size = max(self.num_rescuers - 1, 0)
+        vis_mask_victims_size = self.num_missing
+
+        # Observation bounds (positions are relative, bounded by ~2x world size)
+        obs_low = -3.0
+        obs_high = 3.0
+
+        # Global state bounds (absolute positions bounded by world size)
+        state_low = -2.0
+        state_high = 2.0
+
+        # Observation spec - single agent observation with visibility masks + global state
+        self.observation_spec = Composite(
+            observation=Bounded(
+                low=obs_low,
+                high=obs_high,
+                shape=(obs_size,),
+                dtype=torch.float32,
+                device=self.device,
+            ),
+            state=Bounded(
+                low=state_low,
+                high=state_high,
+                shape=(self.global_state_size,),
+                dtype=torch.float32,
+                device=self.device,
+            ),
+            vis_mask_rescuers=Bounded(
+                low=0.0,
+                high=1.0,
+                shape=(vis_mask_rescuers_size,),
+                dtype=torch.float32,
+                device=self.device,
+            ),
+            vis_mask_victims=Bounded(
+                low=0.0,
+                high=1.0,
+                shape=(vis_mask_victims_size,),
+                dtype=torch.float32,
+                device=self.device,
+            ),
+            shape=(),
         )
-        self.metadata["name"] = "search_and_rescue_v1"
 
-
-env = make_env(raw_env)
-parallel_env = parallel_wrapper_fn(env)
-
-
-class Scenario(BaseScenario):
-    def __init__(self) -> None:
-        super().__init__()
-        self.vision = 15
-
-    def make_world(
-        self,
-        num_missing=1,
-        num_rescuers=3,
-        num_trees=5,
-        num_safezones=4,
-    ):
-        victim_types = ["A", "B", "C", "D"]  # Example types for victims
-        safe_zone_types = ["A", "B", "C", "D"]  # Matching types for safe zones
-        type_colors = {
-            "A": np.array([1.0, 0.0, 0.0]),  # Red
-            "B": np.array([0.0, 1.0, 0.0]),  # Green
-            "C": np.array([0.0, 0.0, 1.0]),  # Blue
-            "D": np.array([1.0, 1.0, 0.0]),  # Yellow
-        }
-        world = World()
-        # set any world properties first
-        world.dim_c = 2
-        num_missing_agents = num_missing
-        num_rescuers = num_rescuers
-        num_trees = num_trees
-        num_safezones = num_safezones
-        num_agents = num_rescuers + num_missing_agents
-        num_landmarks = num_trees + num_safezones
-
-        # Add agents
-        world.agents = [Agent() for _ in range(num_agents)]
-        for i, agent in enumerate(world.agents):
-            agent.adversary = True if i < num_rescuers else False
-            agent.saved = False  # New attribute to mark saved agents
-            base_name = "adversary" if agent.adversary else "agent"
-            base_index = i if i < num_rescuers else i - num_rescuers
-            agent.name = f"{base_name}_{base_index}"
-            agent.collide = True
-            agent.silent = True
-            agent.size = 0.025 if agent.adversary else 0.01
-            agent.accel = 3 if agent.adversary else 4
-            agent.max_speed = 0.3 if agent.adversary else 0.3
-        # add landmarks
-        world.landmarks = [Landmark() for i in range(num_landmarks)]
-        for i, landmark in enumerate(world.landmarks):
-            landmark.tree = True if i < num_trees else False
-            base_name = "tree" if landmark.tree else "safezone"
-            base_index = i if i < num_trees else i - num_trees
-            landmark.name = f"{base_name}_{base_index}"
-            landmark.collide = True if landmark.tree else False
-            landmark.movable = False
-            landmark.size = 0.03 if landmark.tree else 0.1
-            landmark.boundary = False
-
-        # Assign victim types
-        for i, agent in enumerate(world.agents):
-            if not agent.adversary:  # Only for victims
-                agent.type = victim_types[i % len(victim_types)]
-                # Assign the corresponding color
-                agent.color = type_colors[agent.type]
-        # Assign safe zone types
-        for i, landmark in enumerate(world.landmarks):
-            if not landmark.tree:  # Only for safe zones
-                landmark.type = safe_zone_types[i % len(safe_zone_types)]
-                landmark.color = type_colors[
-                    landmark.type
-                ]  # Assign the corresponding color
-
-        return world
-
-    def reset_world(self, world, np_random, reset_landmarks=True):
-        type_colors = {
-            "A": np.array([1.0, 0.0, 0.0]),  # Red
-            "B": np.array([0.0, 1.0, 0.0]),  # Green
-            "C": np.array([0.0, 0.0, 1.0]),  # Blue
-            "D": np.array([1.0, 1.0, 0.0]),  # Yellow
-        }
-
-        safe_zone_positions = [
-            [-1, 1],  # Top-left corner
-            [-1, -1],  # Bottom-left corner
-            [1, 1],  # Top-right corner
-            [1, -1],  # Bottom-right corner
-        ]
-        # random properties for agents
-        for i, agent in enumerate(world.agents):
-            agent.color = (
-                type_colors[agent.type]
-                if not agent.adversary
-                else np.array([0.85, 0.35, 0.35])
+        # Action spec
+        if self.continuous_actions:
+            # Continuous: 2D force vector
+            self.action_spec = Bounded(
+                low=-1.0,
+                high=1.0,
+                shape=(2,),
+                dtype=torch.float32,
+                device=self.device,
             )
-            # random properties for landmarks
-        for i, landmark in enumerate(world.landmarks):
-            landmark.color = (
-                type_colors[landmark.type]
-                if not landmark.tree
-                else np.array([0.35, 0.85, 0.35])
-            )
-        # set random initial states
-        for agent in world.agents:
-            agent.state.p_pos = np_random.uniform(-0.5, +0.5, world.dim_p)
-            agent.state.p_vel = np.zeros(world.dim_p)
-            agent.state.c = np.zeros(world.dim_c)
-        if reset_landmarks:
-            j = 0
-            for i, landmark in enumerate(world.landmarks):
-                if not landmark.boundary:
-                    if landmark.tree:
-                        landmark.state.p_pos = np_random.uniform(
-                            -0.8, +0.8, world.dim_p
-                        )
-                        landmark.state.p_vel = np.zeros(world.dim_p)
-                    else:
-                        landmark.state.p_pos = safe_zone_positions[j]
-                        landmark.state.p_vel = np.zeros(world.dim_p)
-                        j += 1
-
-        self.log_rescue_status(world)
-
-    def benchmark_data(self, agent, world):
-        # returns data for benchmarking purposes
-        if agent.adversary:
-            collisions = 0
-            for a in self.good_agents(world):
-                if self.is_victim_rescued(a, agent):
-                    collisions += 1
-            return collisions
         else:
-            return 0
+            # Discrete: 5 actions (no-op, left, right, down, up)
+            self.action_spec = Categorical(
+                n=5,
+                shape=(),
+                dtype=torch.int64,
+                device=self.device,
+            )
 
-    def is_collision(self, agent1, agent2):
-        delta_pos = agent1.state.p_pos - agent2.state.p_pos
-        dist = np.sqrt(np.sum(np.square(delta_pos)))
-        dist_min = agent1.size + agent2.size
-        return True if dist < dist_min else False
+        # Reward spec
+        self.reward_spec = Unbounded(
+            shape=(1,),
+            dtype=torch.float32,
+            device=self.device,
+        )
 
-    def step(self, world):
-        for rescuer in self.adversaries(world):
-            for victim in self.good_agents(world):
-                if victim.saved:  # Skip saved victims
+        # Done spec
+        self.done_spec = Composite(
+            done=Categorical(
+                n=2,
+                shape=(1,),
+                dtype=torch.bool,
+                device=self.device,
+            ),
+            terminated=Categorical(
+                n=2,
+                shape=(1,),
+                dtype=torch.bool,
+                device=self.device,
+            ),
+            truncated=Categorical(
+                n=2,
+                shape=(1,),
+                dtype=torch.bool,
+                device=self.device,
+            ),
+            shape=(),
+        )
+
+    def _set_seed(self, seed: Optional[int]):
+        """Set random seed."""
+        if seed is not None:
+            torch.manual_seed(seed)
+            np.random.seed(seed)
+            self._np_random = np.random.RandomState(seed)
+        else:
+            self._np_random = np.random.RandomState()
+
+    def _reset(self, tensordict: Optional[TensorDict] = None, **kwargs) -> TensorDict:
+        """Reset the environment."""
+        self._step_count = 0
+
+        # Safe zone fixed positions (corners)
+        safe_zone_positions = [
+            np.array([-1.0, 1.0]),  # Top-left
+            np.array([-1.0, -1.0]),  # Bottom-left
+            np.array([1.0, 1.0]),  # Top-right
+            np.array([1.0, -1.0]),  # Bottom-right
+        ]
+
+        # Reset rescuer agents
+        for agent in self.agents:
+            agent.p_pos = self._np_random.uniform(-0.3, 0.3, self.dim_p)
+            agent.p_vel = np.zeros(self.dim_p)
+            agent.c = np.zeros(self.dim_c)
+
+        # Reset victims (scattered around the map)
+        for victim in self.victims:
+            victim.p_pos = self._np_random.uniform(-0.7, 0.7, self.dim_p)
+            victim.p_vel = np.zeros(self.dim_p)
+            victim.state = VictimState.IDLE
+            victim.following = None
+            victim.color = self.TYPE_COLORS[victim.type].copy()
+
+        # Reset landmarks
+        safe_zone_idx = 0
+        for landmark in self.landmarks:
+            if landmark.tree:
+                landmark.p_pos = self._np_random.uniform(-0.8, 0.8, self.dim_p)
+            else:
+                landmark.p_pos = safe_zone_positions[
+                    safe_zone_idx % len(safe_zone_positions)
+                ].copy()
+                safe_zone_idx += 1
+            landmark.p_vel = np.zeros(self.dim_p)
+
+        # Get observation for main rescuer
+        obs, vis_mask_rescuers, vis_mask_victims = self._get_observation(self.agents[0])
+
+        # Get global state for CTDE critic
+        global_state = self._get_global_state()
+
+        return TensorDict(
+            {
+                "observation": torch.tensor(
+                    obs, dtype=torch.float32, device=self.device
+                ),
+                "state": torch.tensor(
+                    global_state, dtype=torch.float32, device=self.device
+                ),
+                "vis_mask_rescuers": torch.tensor(
+                    vis_mask_rescuers, dtype=torch.float32, device=self.device
+                ),
+                "vis_mask_victims": torch.tensor(
+                    vis_mask_victims, dtype=torch.float32, device=self.device
+                ),
+                "done": torch.tensor([False], dtype=torch.bool, device=self.device),
+                "terminated": torch.tensor(
+                    [False], dtype=torch.bool, device=self.device
+                ),
+                "truncated": torch.tensor(
+                    [False], dtype=torch.bool, device=self.device
+                ),
+            },
+            batch_size=self.batch_size,
+        )
+
+    def _step(self, tensordict: TensorDict) -> TensorDict:
+        """Execute one step in the environment."""
+        action = tensordict["action"]
+
+        # Convert action to numpy
+        if isinstance(action, torch.Tensor):
+            action = action.cpu().numpy()
+
+        # Apply action to main rescuer
+        main_rescuer = self.agents[0]
+        self._set_action(action, main_rescuer)
+
+        # Apply random actions to other rescuers (or scripted behavior)
+        for rescuer in self.agents[1:]:
+            random_action = self._np_random.randint(0, 5)
+            self._set_action(random_action, rescuer)
+
+        # Update victim states and movement
+        self._update_victims()
+
+        # Physics step for agents
+        self._world_step()
+
+        # Move victims (after agent physics)
+        self._move_victims()
+
+        # Check for rescues
+        self._check_rescues()
+
+        # Calculate reward for main rescuer
+        reward = self._get_reward(main_rescuer)
+
+        # Get new observation
+        obs, vis_mask_rescuers, vis_mask_victims = self._get_observation(main_rescuer)
+
+        # Get global state for CTDE critic
+        global_state = self._get_global_state()
+
+        # Increment step counter
+        self._step_count += 1
+
+        # Check termination
+        all_saved = all(v.state == VictimState.STOP for v in self.victims)
+        truncated = self._step_count >= self.max_cycles
+        terminated = all_saved
+        done = terminated or truncated
+
+        return TensorDict(
+            {
+                "observation": torch.tensor(
+                    obs, dtype=torch.float32, device=self.device
+                ),
+                "state": torch.tensor(
+                    global_state, dtype=torch.float32, device=self.device
+                ),
+                "vis_mask_rescuers": torch.tensor(
+                    vis_mask_rescuers, dtype=torch.float32, device=self.device
+                ),
+                "vis_mask_victims": torch.tensor(
+                    vis_mask_victims, dtype=torch.float32, device=self.device
+                ),
+                "reward": torch.tensor(
+                    [reward], dtype=torch.float32, device=self.device
+                ),
+                "done": torch.tensor([done], dtype=torch.bool, device=self.device),
+                "terminated": torch.tensor(
+                    [terminated], dtype=torch.bool, device=self.device
+                ),
+                "truncated": torch.tensor(
+                    [truncated], dtype=torch.bool, device=self.device
+                ),
+            },
+            batch_size=self.batch_size,
+        )
+
+    def _update_victims(self):
+        """Update victim states based on proximity to rescuers."""
+        for victim in self.victims:
+            if victim.state == VictimState.STOP:
+                continue  # Already saved, don't update
+
+            # Find nearest rescuer within follow range
+            nearest_rescuer = None
+            min_dist = float("inf")
+
+            for rescuer in self.agents:
+                dist = self._get_distance_pos(victim.p_pos, rescuer.p_pos)
+                # Check if in range and not blocked by obstacle
+                if dist < self.follow_range and dist < min_dist:
+                    if not self._is_blocked_by_obstacle_pos(
+                        victim.p_pos, rescuer.p_pos
+                    ):
+                        nearest_rescuer = rescuer
+                        min_dist = dist
+
+            # Update state based on proximity
+            if nearest_rescuer is not None:
+                victim.state = VictimState.FOLLOW
+                victim.following = nearest_rescuer
+            else:
+                # No rescuer in range
+                if victim.state == VictimState.FOLLOW:
+                    # Keep following last rescuer if they went out of extended range
+                    if victim.following is not None:
+                        dist_to_following = self._get_distance_pos(
+                            victim.p_pos, victim.following.p_pos
+                        )
+                        # Stop following if too far (1.5x follow range)
+                        if dist_to_following > self.follow_range * 1.5:
+                            victim.state = VictimState.IDLE
+                            victim.following = None
+                else:
+                    victim.state = VictimState.IDLE
+                    victim.following = None
+
+    def _move_victims(self):
+        """Move victims based on their state."""
+        for victim in self.victims:
+            if victim.state == VictimState.STOP:
+                victim.p_vel = np.zeros(self.dim_p)
+                continue
+
+            if victim.state == VictimState.IDLE:
+                # Idle: small random movement or stay still
+                victim.p_vel = np.zeros(self.dim_p)
+                continue
+
+            if victim.state == VictimState.FOLLOW and victim.following is not None:
+                # Follow: move towards the rescuer
+                direction = victim.following.p_pos - victim.p_pos
+                dist = np.linalg.norm(direction)
+
+                if dist > 0.05:  # Don't get too close
+                    direction = direction / dist
+                    victim.p_vel = direction * victim.speed
+                else:
+                    victim.p_vel = np.zeros(self.dim_p)
+
+                # Update position
+                victim.p_pos += victim.p_vel * self.dt
+
+                # Clamp to bounds
+                victim.p_pos = np.clip(victim.p_pos, -0.95, 0.95)
+
+    def _check_rescues(self):
+        """Check if any victims have reached their matching safe zones."""
+        for victim in self.victims:
+            if victim.state == VictimState.STOP:
+                continue
+
+            for safe_zone in self.safe_zones:
+                if victim.type != safe_zone.type:
                     continue
 
-            # Update victims' states
-        for victim in self.good_agents(world):
-            if victim.saved:  # Stop movement for saved agents
-                victim.state.p_vel = np.zeros_like(victim.state.p_vel)
+                dist = self._get_distance_pos(victim.p_pos, safe_zone.p_pos)
 
-        self.log_rescue_status(world)
+                if dist < self.rescue_range:
+                    victim.state = VictimState.STOP
+                    victim.following = None
+                    victim.p_vel = np.zeros(self.dim_p)
+                    victim.p_pos = safe_zone.p_pos.copy()  # Snap to safe zone
+                    # Dim the color to indicate saved
+                    victim.color = victim.color * 0.5
+                    break
 
-    # return all agents that are not adversaries
-    def good_agents(self, world):
-        return [agent for agent in world.agents if not agent.adversary]
+    def _set_action(self, action, agent):
+        """Set action for an agent."""
+        u = np.zeros(self.dim_p)
 
-    def is_victim_rescued(self, agent1, safezone, rescue_radius=0.1):
-        delta_pos = agent1.state.p_pos - safezone.state.p_pos
-        dist = np.sqrt(np.sum(np.square(delta_pos)))
-        dist_min = agent1.size + safezone.size
-        return True if dist < dist_min else False
-
-        # delta_pos = rescuer.state.p_pos - victim.state.p_pos
-        # distance = np.sqrt(np.sum(np.square(delta_pos)))
-        # return distance <= rescue_radius
-
-    # return all adversarial agents
-    def adversaries(self, world):
-        return [agent for agent in world.agents if agent.adversary]
-
-    def safezones(self, world):
-        return [landmark for landmark in world.landmarks if not landmark.tree]
-
-    def reward(self, agent, world):
-        if agent.adversary:
-            return self.adversary_reward(agent, world)
+        if self.continuous_actions:
+            u[0] = action[0] if len(action) > 0 else 0.0
+            u[1] = action[1] if len(action) > 1 else 0.0
         else:
-            return self.agent_reward(agent, world)
+            # Discrete actions: 0=no-op, 1=left, 2=right, 3=down, 4=up
+            if action == 1:
+                u[0] = -1.0
+            elif action == 2:
+                u[0] = 1.0
+            elif action == 3:
+                u[1] = -1.0
+            elif action == 4:
+                u[1] = 1.0
 
-    def is_correctly_delegated(self, victim, safe_zone, rescue_radius=0.1):
+        sensitivity = agent.accel if agent.accel is not None else 5.0
+        u *= sensitivity
+
+        # Store action in agent
+        agent.action_u = u
+
+    def _world_step(self):
+        """Execute physics step for agents."""
+        for agent in self.agents:
+            u = agent.action_u
+            if u is not None:
+                # Apply action force
+                agent.p_vel += u * self.dt
+
+                # Apply damping
+                agent.p_vel *= 1 - self.damping
+
+                # Clamp to max speed
+                speed = np.linalg.norm(agent.p_vel)
+                if speed > agent.max_speed:
+                    agent.p_vel = agent.p_vel / speed * agent.max_speed
+
+        # Handle collisions
+        self._handle_collisions()
+
+        # Update agent positions
+        for agent in self.agents:
+            agent.p_pos += agent.p_vel * self.dt
+            # Clamp to bounds
+            agent.p_pos = np.clip(agent.p_pos, -1, 1)
+
+    def _handle_collisions(self):
+        """Handle collisions between entities."""
+        # Agent-agent collisions
+        for i, agent_a in enumerate(self.agents):
+            for j, agent_b in enumerate(self.agents):
+                if i >= j:
+                    continue
+                self._apply_collision_force(agent_a, agent_b)
+
+        # Agent-landmark collisions (trees only)
+        for agent in self.agents:
+            for landmark in self.landmarks:
+                if landmark.collide:
+                    self._apply_collision_force(agent, landmark)
+
+        # Victim-landmark collisions (trees only)
+        for victim in self.victims:
+            for landmark in self.landmarks:
+                if landmark.collide:
+                    self._apply_collision_force_victim(victim, landmark)
+
+    def _apply_collision_force(self, entity_a, entity_b):
+        """Apply collision forces between two entities."""
+        delta_pos = entity_a.p_pos - entity_b.p_pos
+        dist = np.linalg.norm(delta_pos)
+        dist_min = entity_a.size + entity_b.size
+
+        if dist < dist_min:
+            if dist > 0:
+                direction = delta_pos / dist
+            else:
+                direction = np.array([1.0, 0.0])
+
+            penetration = dist_min - dist
+            force = self.contact_force * penetration * direction
+
+            entity_a.p_vel += force * self.dt
+            if hasattr(entity_b, "movable") and entity_b.movable:
+                entity_b.p_vel -= force * self.dt
+
+    @staticmethod
+    def _apply_collision_force_victim(victim, landmark):
+        """Apply collision force to push victim away from landmark."""
+        delta_pos = victim.p_pos - landmark.p_pos
+        dist = np.linalg.norm(delta_pos)
+        dist_min = victim.size + landmark.size
+
+        if dist < dist_min:
+            if dist > 0:
+                direction = delta_pos / dist
+            else:
+                direction = np.array([1.0, 0.0])
+
+            # Push victim out of collision
+            penetration = dist_min - dist
+            victim.p_pos += direction * penetration
+
+    def _get_observation(self, agent) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
-        Check if the victim is within the rescue radius of the matching safe zone.
+        Get observation for an agent.
+
+        Returns:
+            obs: The observation vector (bounded, no sentinel values)
+            vis_mask_rescuers: Visibility mask for other rescuers (1=visible, 0=hidden)
+            vis_mask_victims: Visibility mask for victims (1=visible, 0=hidden)
         """
-        if victim.saved:  # Already saved, skip
-            return True
+        # Calculate distances to each landmark
+        landmark_distances = []
+        for landmark in self.landmarks:
+            if not landmark.boundary:
+                dist = self._get_distance_pos(agent.p_pos, landmark.p_pos)
+                if dist <= self.vision:
+                    delta_pos = landmark.p_pos - agent.p_pos
+                    landmark_distances.append((dist, delta_pos))
 
-        delta_pos = victim.state.p_pos - safe_zone.state.p_pos
-        dist = np.sqrt(np.sum(np.square(delta_pos)))
+        # Sort by distance and take N closest
+        n_closest = self.n_closest_landmarks
+        landmark_distances.sort(key=lambda x: x[0])
+        closest_landmarks = landmark_distances[:n_closest]
 
-        # Check if victim and safe zone types match
-        if victim.type != safe_zone.type:
-            return False
+        # Pad if not enough landmarks (use zeros for masked/missing landmarks)
+        entity_pos = [pos for _, pos in closest_landmarks]
+        while len(entity_pos) < n_closest:
+            entity_pos.append(np.zeros(2))
 
-        # Check if the victim is within the rescue radius of the safe zone
-        if dist < rescue_radius:
-            victim.saved = True  # Mark the victim as saved
+        # Other rescuer positions (relative) with visibility mask
+        other_rescuer_pos = []
+        vis_mask_rescuers = []
+        for other in self.agents:
+            if other is agent:
+                continue
 
-            # Stop the victim
-            victim.state.p_vel = np.zeros_like(victim.state.p_vel)
+            dist = self._get_distance_pos(agent.p_pos, other.p_pos)
+            is_blocked = self._is_blocked_by_obstacle_pos(agent.p_pos, other.p_pos)
+            is_visible = (dist <= self.vision) and (not is_blocked)
 
-            print(f"Victim {victim.name} is saved at Safe Zone {safe_zone.name}!")
-            return True
+            if is_visible:
+                other_rescuer_pos.append(other.p_pos - agent.p_pos)
+                vis_mask_rescuers.append(1.0)
+            else:
+                # Use zeros instead of sentinel values
+                other_rescuer_pos.append(np.zeros(2))
+                vis_mask_rescuers.append(0.0)
 
-        return False
+        # Victim info: relative position + state with visibility mask
+        victim_info = []
+        vis_mask_victims = []
+        for victim in self.victims:
+            dist = self._get_distance_pos(agent.p_pos, victim.p_pos)
+            is_blocked = self._is_blocked_by_obstacle_pos(agent.p_pos, victim.p_pos)
+            is_visible = (dist <= self.vision) and (not is_blocked)
 
-    def bound(self, pos):
-        penalty = 0
-        # Define boundaries for each axis
-        x_min, x_max = -0.7, 0.7
-        y_min, y_max = -0.7, 0.7
+            if is_visible:
+                rel_pos = victim.p_pos - agent.p_pos
+                state_val = float(victim.state.value)  # 0=idle, 1=follow, 2=stop
+                victim_info.append(np.array([rel_pos[0], rel_pos[1], state_val]))
+                vis_mask_victims.append(1.0)
+            else:
+                # Use zeros instead of sentinel values
+                victim_info.append(np.zeros(3))
+                vis_mask_victims.append(0.0)
 
-        # Check x-coordinate
+        # Concatenate observation
+        obs = np.concatenate(
+            [agent.p_vel] + [agent.p_pos] + entity_pos + other_rescuer_pos + victim_info
+        )
+
+        return (
+            obs.astype(np.float32),
+            np.array(vis_mask_rescuers, dtype=np.float32),
+            np.array(vis_mask_victims, dtype=np.float32),
+        )
+
+    def _get_global_state(self) -> np.ndarray:
+        """
+        Get global state for CTDE (Centralized Training with Decentralized Execution).
+
+        This provides full observability for the centralized critic during training,
+        while actors only see their local observations.
+
+        Global State Shape (fixed):
+            - All rescuer positions: num_rescuers * 2
+            - All rescuer velocities: num_rescuers * 2
+            - All victim positions: num_missing * 2
+            - All victim states: num_missing * 1  (0=idle, 1=follow, 2=stop)
+            - All tree positions: num_trees * 2
+            - All safe zone positions: num_safe_zones * 2
+
+        Total size: self.global_state_size
+
+        Returns:
+            np.ndarray: Global state vector (shape: global_state_size,)
+        """
+        state_components = []
+
+        # All rescuer positions (absolute)
+        for agent in self.agents:
+            state_components.append(agent.p_pos)
+
+        # All rescuer velocities
+        for agent in self.agents:
+            state_components.append(agent.p_vel)
+
+        # All victim positions (absolute)
+        for victim in self.victims:
+            state_components.append(victim.p_pos)
+
+        # All victim states
+        victim_states = np.array([float(v.state.value) for v in self.victims])
+        state_components.append(victim_states)
+
+        # All tree positions
+        for landmark in self.landmarks:
+            if landmark.tree:
+                state_components.append(landmark.p_pos)
+
+        # All safe zone positions
+        for landmark in self.landmarks:
+            if not landmark.tree and not landmark.boundary:
+                state_components.append(landmark.p_pos)
+
+        # Concatenate and clip to bounds
+        global_state = np.concatenate(state_components)
+        global_state = np.clip(global_state, -2.0, 2.0)
+
+        return global_state.astype(np.float32)
+
+    def _get_reward(self, agent) -> float:
+        """Calculate reward for rescuer agent."""
+        reward = 0.0
+
+        # Count victims in each state
+        idle_victims = [v for v in self.victims if v.state == VictimState.IDLE]
+        following_victims = [v for v in self.victims if v.state == VictimState.FOLLOW]
+        saved_victims = [v for v in self.victims if v.state == VictimState.STOP]
+
+        # Reward for victims following (small positive)
+        reward += len(following_victims) * 0.1
+
+        # Big reward for saved victims
+        reward += len(saved_victims) * 1.0
+
+        # Shaping: encourage getting close to idle victims
+        for victim in idle_victims:
+            dist = self._get_distance_pos(agent.p_pos, victim.p_pos)
+            reward -= dist * 0.05  # Small penalty for distance to idle victims
+
+        # Shaping: encourage leading following victims to safe zones
+        for victim in following_victims:
+            # Find matching safe zone
+            matching_safe_zone = next(
+                (sz for sz in self.safe_zones if sz.type == victim.type), None
+            )
+            if matching_safe_zone:
+                dist_to_safe = self._get_distance_pos(
+                    victim.p_pos, matching_safe_zone.p_pos
+                )
+                reward += (
+                    1.0 / (1 + dist_to_safe) * 0.2
+                )  # Bonus for victim being close to safe zone
+
+        # Penalty for hitting trees
+        for landmark in self.landmarks:
+            if landmark.tree:
+                if self._is_collision_pos(
+                    agent.p_pos, agent.size, landmark.p_pos, landmark.size
+                ):
+                    reward -= 0.5
+
+        # Boundary penalty
+        reward -= self._bound_penalty(agent.p_pos)
+
+        return reward
+
+    @staticmethod
+    def _bound_penalty(pos: np.ndarray) -> float:
+        """Calculate penalty for being near bounds."""
+        penalty = 0.0
+        x_min, x_max = -0.9, 0.9
+        y_min, y_max = -0.9, 0.9
+
         if pos[0] < x_min:
-            # Greater penalty for being further out
             penalty += (x_min - pos[0]) * 10
         elif pos[0] > x_max:
             penalty += (pos[0] - x_max) * 10
 
-        # Check y-coordinate
         if pos[1] < y_min:
             penalty += (y_min - pos[1]) * 10
         elif pos[1] > y_max:
@@ -279,162 +831,250 @@ class Scenario(BaseScenario):
 
         return penalty
 
-    def agent_reward(self, agent, world):
+    @staticmethod
+    def _is_collision_pos(pos_a, size_a, pos_b, size_b) -> bool:
+        """Check if two entities are colliding."""
+        delta_pos = pos_a - pos_b
+        dist = np.linalg.norm(delta_pos)
+        dist_min = size_a + size_b
+        return dist < dist_min
+
+    def _is_blocked_by_obstacle_pos(self, pos_a, pos_b) -> bool:
+        """Check if line of sight is blocked by a tree.
+
+        Only returns True if a tree is actually BETWEEN pos_a and pos_b,
+        not if it's behind either endpoint.
         """
-        Reward function for victims (non-adversaries).
-        Victims don't independently earn rewards, but their state impacts rescuers' rewards.
-        """
-        if agent.saved:
-            return 0
-
-        reward = 0
-
-        # Penalize for being out of bounds
-        reward -= self.bound(agent.state.p_pos)
-
-        return reward
-
-    def adversary_reward(self, agent, world):
-        """
-        Reward function for rescuers (adversaries).
-        Rescuers are rewarded for successfully guiding victims to safe zones.
-        """
-        reward = 0
-        shape = True
-        victims = [
-            v for v in self.good_agents(world) if not v.saved
-        ]  # Only unsaved victims
-        safezones = self.safezones(world)
-
-        # Reward shaping: Encourage rescuers to get closer to victims
-        if shape:
-            for victim in victims:
-                # Penalize rescuers for being far from the victim
-                distance_to_victim = np.linalg.norm(
-                    agent.state.p_pos - victim.state.p_pos
-                )
-
-                # Penalize distance from victim
-                reward -= distance_to_victim * 0.1
-
-                # Reward for guiding the victim closer to a matching safe zone
-                matching_safezone = next(
-                    (sz for sz in safezones if sz.type == victim.type), None
-                )
-                if matching_safezone:
-                    distance_to_safezone = np.linalg.norm(
-                        victim.state.p_pos - matching_safezone.state.p_pos
-                    )
-                    reward += 1.0 / (
-                        1 + distance_to_safezone
-                    )  # Reward for reducing distance
-
-                    # Bonus for successfully delegating the victim
-                    if self.is_correctly_delegated(victim, matching_safezone):
-                        reward += 100  # Large reward for successful rescue
-
-        # Penalty for collisions with obstacles
-        if shape:
-            for obstacle in world.landmarks:
-                if obstacle.collide and self.is_collision(agent, obstacle):
-                    reward -= 10  # Penalty for hitting an obstacle
-
-        # Penalize for going out of bounds
-        reward -= self.bound(agent.state.p_pos)
-
-        return reward
-
-    def log_rescue_status(self, world):
-        saved_agents = sum(1 for agent in self.good_agents(world) if agent.saved)
-        print(f"Saved agents: {saved_agents}/{len(self.good_agents(world))}")
-
-    def is_blocked_by_obstacle(self, agent1, agent2, world):
-        """
-        Check if the line of sight between two agents is blocked by any obstacle.
-        """
-        for obstacle in world.landmarks:
-            if obstacle.collide:
-                # Only consider obstacles that can block line of sight
-                if self.line_intersects_circle(
-                    agent1.state.p_pos,
-                    agent2.state.p_pos,
-                    obstacle.state.p_pos,
-                    obstacle.size,
+        for landmark in self.landmarks:
+            if landmark.tree:
+                if self._line_segment_intersects_circle(
+                    pos_a, pos_b, landmark.p_pos, landmark.size
                 ):
                     return True
         return False
 
-    def line_intersects_circle(self, point1, point2, circle_center, circle_radius):
+    @staticmethod
+    def _line_segment_intersects_circle(p1, p2, center, radius) -> bool:
         """
-        Check if the line segment between two points intersects a circle.
-        Args:
-            point1 (array): The first point of the line segment (e.g., agent's position).
-            point2 (array): The second point of the line segment (e.g., other agent's position).
-            circle_center (array): The center of the circle (e.g., tree's position).
-            circle_radius (float): The radius of the circle.
+        Check if line SEGMENT (not infinite line) intersects a circle.
 
-        Returns:
-            bool: True if the line segment intersects the circle, False otherwise.
+        Uses parametric form: P(t) = p1 + t*(p2-p1) for t in [0,1]
+        Checks if the closest point on the segment to the circle center
+        is within the radius.
         """
-        # Adjust points relative to circle center
-        point1_rel = point1 - circle_center
-        point2_rel = point2 - circle_center
+        # Direction vector from p1 to p2
+        d = p2 - p1
+        f = p1 - center  # Vector from circle center to p1
 
-        # Calculate coefficients of the quadratic equation
-        dx, dy = point2_rel - point1_rel
-        dr_squared = dx**2 + dy**2
-        D = point1_rel[0] * point2_rel[1] - point2_rel[0] * point1_rel[1]
+        a = np.dot(d, d)
+        b = 2 * np.dot(f, d)
+        c = np.dot(f, f) - radius * radius
 
-        # Calculate discriminant
-        discriminant = circle_radius**2 * dr_squared - D**2
+        # Handle degenerate case (p1 == p2)
+        if a < 1e-10:
+            return np.linalg.norm(f) <= radius
 
-        return discriminant >= 0  # Intersects if discriminant is non-negative
+        discriminant = b * b - 4 * a * c
 
-    def get_distance(self, obj_a, obj_b):
-        delta_pos = obj_a.state.p_pos - obj_b.state.p_pos
-        distance = np.sqrt(np.sum(np.square(delta_pos)))
+        if discriminant < 0:
+            # No intersection with infinite line
+            return False
 
-        return distance
+        discriminant = np.sqrt(discriminant)
 
-    def observation(self, agent, world):
-        # Calculate distances to each landmark
-        landmark_distances = []
-        for entity in world.landmarks:
-            if not entity.boundary:
-                distance = self.get_distance(agent, entity)
-                if distance <= self.vision:
-                    delta_pos = entity.state.p_pos - agent.state.p_pos
-                    landmark_distances.append((distance, delta_pos))
+        # Two intersection points with infinite line at t1 and t2
+        t1 = (-b - discriminant) / (2 * a)
+        t2 = (-b + discriminant) / (2 * a)
 
-        # Sort landmarks by distance and take the N closest
-        N = 3  # Number of closest landmarks to consider
-        landmark_distances.sort(key=lambda x: x[0])
-        closest_landmarks = landmark_distances[:N]
+        # Check if either intersection point is within segment bounds [0, 1]
+        # Or if the segment is entirely inside the circle
+        if 0 <= t1 <= 1:
+            return True
+        if 0 <= t2 <= 1:
+            return True
 
-        # Get positions of N closest landmarks
-        entity_pos = [pos for _, pos in closest_landmarks]
+        # Check if segment is entirely inside circle (both t values outside [0,1] but circle contains segment)
+        if t1 < 0 and t2 > 1:
+            return True
 
-        # Check if other agents are visible (not blocked by obstacles)
-        other_pos = []
-        other_vel = []
-        for other in world.agents:
-            if (
-                other is agent
-                or self.is_blocked_by_obstacle(agent, other, world)
-                or self.get_distance(agent, other) <= self.vision
-            ):
-                other_pos.append(np.array([1e6, 1e6]))
+        return False
+
+    @staticmethod
+    def _get_distance_pos(pos_a, pos_b) -> float:
+        """Calculate distance between two positions."""
+        return np.linalg.norm(pos_a - pos_b)
+
+    @property
+    def safe_zones(self):
+        """Get list of safe zone landmarks."""
+        return [lm for lm in self.landmarks if not lm.tree]
+
+    @property
+    def trees(self):
+        """Get list of tree landmarks."""
+        return [lm for lm in self.landmarks if lm.tree]
+
+    @property
+    def rescuers(self):
+        """Get list of rescuer agents (alias for agents)."""
+        return self.agents
+
+    @property
+    def num_agents(self):
+        """Get number of agents (rescuers)."""
+        return len(self.agents)
+
+    def _get_distance(self, entity_a, entity_b) -> float:
+        """Calculate distance between two entities."""
+        return self._get_distance_pos(entity_a.p_pos, entity_b.p_pos)
+
+    def _is_blocked_by_obstacle(self, entity_a, entity_b) -> bool:
+        """Check if line of sight between two entities is blocked by a tree."""
+        return self._is_blocked_by_obstacle_pos(entity_a.p_pos, entity_b.p_pos)
+
+    def render(self):
+        """Render the environment."""
+        if self.render_mode is None:
+            return None
+
+        if self.screen is None:
+            pygame.init()
+            pygame.display.init()
+            if self.render_mode == "human":
+                self.screen = pygame.display.set_mode((self.width, self.height))
+                pygame.display.set_caption("Search and Rescue")
             else:
-                other_pos.append(other.state.p_pos - agent.state.p_pos)
-            if not other.adversary:
-                other_vel.append(other.state.p_vel)
+                self.screen = pygame.Surface((self.width, self.height))
+            self.clock = pygame.time.Clock()
 
-        observation_data = np.concatenate(
-            [agent.state.p_vel]
-            + [agent.state.p_pos]
-            + entity_pos
-            + other_pos
-            + other_vel
+        # Clear screen
+        self.screen.fill((240, 240, 240))
+
+        # Calculate camera range
+        cam_range = 1.0
+
+        def to_screen(pos):
+            """Convert world position to screen coordinates."""
+            _x, _y = pos
+            _y = -_y  # Flip y for display
+            _x = (_x / cam_range) * self.width // 2 * 0.9 + self.width // 2
+            _y = (_y / cam_range) * self.height // 2 * 0.9 + self.height // 2
+            return int(_x), int(_y)
+
+        def draw_circle(obj: Union[Landmark | Agent]) -> tuple[int, int, int]:
+            """Draw a circle for an object and return screen coords and radius."""
+            _x, _y = to_screen(obj.p_pos)
+            _radius = int(obj.size * 350)
+            _color = tuple((obj.color * 200).astype(int))
+            pygame.draw.circle(self.screen, _color, (x, y), _radius)
+            return _x, _y, _radius
+
+        # Draw safe zones (background)
+        for safe_zone in self.safe_zones:
+            x, y = to_screen(safe_zone.p_pos)
+            radius = int(safe_zone.size * 350)
+            color = tuple((safe_zone.color * 100 + 100).astype(int))
+            pygame.draw.circle(self.screen, color, (x, y), radius)
+            pygame.draw.circle(self.screen, (0, 0, 0), (x, y), radius, 2)
+
+            # Draw type label
+            font = pygame.font.Font(None, 24)
+            text = font.render(safe_zone.type, True, (0, 0, 0))
+            text_rect = text.get_rect(center=(x, y))
+            self.screen.blit(text, text_rect)
+
+        # Draw trees
+        for tree in self.trees:
+            x, y, radius = draw_circle(tree)
+            pygame.draw.circle(self.screen, (0, 100, 0), (x, y), radius, 2)
+
+        # Draw victims
+        for victim in self.victims:
+            x, y = to_screen(victim.p_pos)
+            radius = int(victim.size * 350)
+            color = tuple((victim.color * 200).astype(int))
+
+            # Draw state indicator
+            if victim.state == VictimState.IDLE:
+                # Circle with question mark
+                pygame.draw.circle(self.screen, color, (x, y), radius)
+                pygame.draw.circle(self.screen, (0, 0, 0), (x, y), radius, 1)
+            elif victim.state == VictimState.FOLLOW:
+                # Circle with movement indicator (arrow)
+                pygame.draw.circle(self.screen, color, (x, y), radius)
+                pygame.draw.circle(self.screen, (255, 255, 255), (x, y), radius, 2)
+                # Draw line to rescuer being followed
+                if victim.following is not None:
+                    rx, ry = to_screen(victim.following.p_pos)
+                    pygame.draw.line(self.screen, (200, 200, 200), (x, y), (rx, ry), 1)
+            elif victim.state == VictimState.STOP:
+                # Dimmed circle with checkmark
+                pygame.draw.circle(self.screen, color, (x, y), radius)
+                pygame.draw.circle(self.screen, (0, 0, 0), (x, y), radius, 2)
+
+            # Draw type label
+            font = pygame.font.Font(None, 16)
+            text = font.render(victim.type, True, (255, 255, 255))
+            text_rect = text.get_rect(center=(x, y))
+            self.screen.blit(text, text_rect)
+
+        # Draw rescuers
+        for agent in self.agents:
+            x, y, radius = draw_circle(agent)
+            pygame.draw.circle(self.screen, (100, 0, 0), (x, y), radius, 2)
+
+            # Draw vision range (faint circle)
+            vision_radius = int(self.follow_range * 350)
+            pygame.draw.circle(self.screen, (200, 200, 255), (x, y), vision_radius, 1)
+
+        # Draw HUD
+        font = pygame.font.Font(None, 24)
+        idle_count = sum(1 for v in self.victims if v.state == VictimState.IDLE)
+        follow_count = sum(1 for v in self.victims if v.state == VictimState.FOLLOW)
+        saved_count = sum(1 for v in self.victims if v.state == VictimState.STOP)
+
+        hud_text = (
+            f"Step: {self._step_count}/{self.max_cycles} | "
+            + f"Idle: {idle_count} | Following: {follow_count} | Saved: {saved_count}"
+        )
+        text_surface = font.render(hud_text, True, (0, 0, 0))
+        self.screen.blit(text_surface, (10, 10))
+
+        if self.render_mode == "rgb_array":
+            return np.transpose(
+                np.array(pygame.surfarray.pixels3d(self.screen)), axes=(1, 0, 2)
+            )
+        elif self.render_mode == "human":
+            pygame.display.flip()
+            self.clock.tick(self.metadata["render_fps"])
+        return None
+
+    def close(self, raise_if_closed: bool = True):
+        """Clean up resources."""
+        if self.screen is not None:
+            pygame.quit()
+            self.screen = None
+
+    # ---- Public helpers (avoid protected-member access from outside) ----
+    def is_collision(self, entity_a, entity_b) -> bool:
+        """Public wrapper for collision check."""
+        return self._is_collision_pos(
+            pos_a=entity_a.p_pos,
+            size_a=entity_a.size,
+            pos_b=entity_b.p_pos,
+            size_b=entity_b.size,
         )
 
-        return observation_data
+    def bound_penalty(self, pos: np.ndarray) -> float:
+        """Public wrapper for boundary penalty."""
+        return self._bound_penalty(pos)
+
+    def sample_discrete_action(self) -> int:
+        """Sample a discrete action using the environment RNG."""
+        return int(self._np_random.randint(0, 5))
+
+
+# Factory functions for compatibility
+def make_env(**kwargs):
+    """Create a SearchAndRescueEnv instance."""
+    return SearchAndRescueEnv(**kwargs)
