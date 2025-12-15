@@ -10,6 +10,7 @@ Victims are environmental entities (not agents) with three states:
 - FOLLOW: Following the nearest rescuer within range
 - STOP: Reached a safe zone and stopped (saved)
 """
+from __future__ import annotations
 
 from enum import Enum
 import numpy as np
@@ -57,7 +58,7 @@ class Victim:
         self.type = None  # Victim type (A, B, C, D)
         self.color = np.array([0.0, 0.0, 0.0])
         # State
-        self.action_u = np.zeros(2)
+        self.action_u = None
         self.p_pos = np.zeros(2)  # Position
         self.p_vel = np.zeros(2)  # Velocity
         self.c = np.zeros(2)  # Communication
@@ -537,9 +538,10 @@ class SearchAndRescueEnv(EnvBase):
     def _world_step(self):
         """Execute physics step for agents."""
         for agent in self.agents:
-            if hasattr(agent, "_action_u"):
+            u = agent.action_u
+            if u is not None:
                 # Apply action force
-                agent.p_vel += agent.action_u * self.dt
+                agent.p_vel += u * self.dt
 
                 # Apply damping
                 agent.p_vel *= 1 - self.damping
