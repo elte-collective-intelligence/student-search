@@ -18,7 +18,7 @@ import pygame
 from tensordict import TensorDict
 from torchrl.envs import EnvBase
 from torchrl.data import BoundedTensorSpec, Unbounded, Categorical, Composite
-from typing import Optional
+from typing import Optional, Union
 
 
 class VictimState(Enum):
@@ -598,7 +598,8 @@ class SearchAndRescueEnv(EnvBase):
             if hasattr(entity_b, "movable") and entity_b.movable:
                 entity_b.p_vel -= force * self.dt
 
-    def _apply_collision_force_victim(self, victim, landmark):
+    @staticmethod
+    def _apply_collision_force_victim(victim, landmark):
         """Apply collision force to push victim away from landmark."""
         delta_pos = victim.p_pos - landmark.p_pos
         dist = np.linalg.norm(delta_pos)
@@ -806,11 +807,19 @@ class SearchAndRescueEnv(EnvBase):
 
         def to_screen(pos):
             """Convert world position to screen coordinates."""
-            x, y = pos
-            y = -y  # Flip y for display
-            x = (x / cam_range) * self.width // 2 * 0.9 + self.width // 2
-            y = (y / cam_range) * self.height // 2 * 0.9 + self.height // 2
-            return int(x), int(y)
+            _x, _y = pos
+            _y = -_y  # Flip y for display
+            _x = (_x / cam_range) * self.width // 2 * 0.9 + self.width // 2
+            _y = (_y / cam_range) * self.height // 2 * 0.9 + self.height // 2
+            return int(_x), int(_y)
+
+        def draw_circle(obj: Union[Landmark | Agent]) -> tuple[int, int, int]:
+            """Draw a circle for an object and return screen coords and radius."""
+            _x, _y = to_screen(obj.p_pos)
+            _radius = int(obj.size * 350)
+            _color = tuple((obj.color * 200).astype(int))
+            pygame.draw.circle(self.screen, _color, (x, y), _radius)
+            return _x, _y, _radius
 
         # Draw safe zones (background)
         for safe_zone in self.safe_zones:
@@ -828,10 +837,7 @@ class SearchAndRescueEnv(EnvBase):
 
         # Draw trees
         for tree in self.trees:
-            x, y = to_screen(tree.p_pos)
-            radius = int(tree.size * 350)
-            color = tuple((tree.color * 200).astype(int))
-            pygame.draw.circle(self.screen, color, (x, y), radius)
+            x, y, radius = draw_circle(tree)
             pygame.draw.circle(self.screen, (0, 100, 0), (x, y), radius, 2)
 
         # Draw victims
@@ -866,10 +872,7 @@ class SearchAndRescueEnv(EnvBase):
 
         # Draw rescuers
         for agent in self.agents:
-            x, y = to_screen(agent.p_pos)
-            radius = int(agent.size * 350)
-            color = tuple((agent.color * 200).astype(int))
-            pygame.draw.circle(self.screen, color, (x, y), radius)
+            x, y, radius = draw_circle(agent)
             pygame.draw.circle(self.screen, (100, 0, 0), (x, y), radius, 2)
 
             # Draw vision range (faint circle)
