@@ -25,7 +25,7 @@ jobs:
 
       - name: Pytest
         env:
-          PYTHONPATH: ${{ github.workspace }}/src
+          PYTHONPATH: ${{ github.workspace }}
           SDL_VIDEODRIVER: dummy
           SDL_AUDIODRIVER: dummy
         run: pytest --maxfail=1 --disable-warnings -q
