@@ -11,3 +11,6 @@ tensordict==0.10.0
 torch==2.9.1
 torchrl==0.10.1
 tqdm==4.67.1
+omegaconf
+setuptools<81
+numpy
