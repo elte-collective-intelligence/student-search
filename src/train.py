@@ -31,6 +31,7 @@ def make_env(env_kwargs, device="cpu"):
 
 def train(
     steps: int = 100000,
+    batch_size: int = 256,
     seed: int = 0,
     save_folder: str = "search_rescue_logs/",
     **env_kwargs,
@@ -77,7 +78,7 @@ def train(
     optim = torch.optim.Adam(loss_module.parameters(), lr=3e-4)
 
     # Create data collector
-    frames_per_batch = min(256, steps // 4)
+    frames_per_batch = min(batch_size, steps // 4)
     print(f"Batch size (frames per batch): {frames_per_batch}")
     collector = SyncDataCollector(
         env,

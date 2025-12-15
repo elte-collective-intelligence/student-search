@@ -54,6 +54,7 @@ def main(cfg: DictConfig):
     if cfg.train.active:
         train(
             steps=cfg.train.total_timesteps,
+            batch_size=cfg.train.batch_size,
             seed=cfg.train.seed,
             render_mode=cfg.train.render_mode,
             save_folder=cfg.save_folder,
