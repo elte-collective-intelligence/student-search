@@ -13,7 +13,7 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
 from src.sar_env import SearchAndRescueEnv
-from src.models import make_ppo_models
+from src.models import make_mappo_models
 
 
 def make_env(env_kwargs, device="cpu"):
@@ -50,10 +50,11 @@ def train(
 
     print(f"Starting training on {env.base_env.metadata['name']}.")
     print(f"Observation shape: {env.observation_spec['observation'].shape}")
+    print(f"Global state shape: {env.observation_spec['state'].shape}")
     print(f"Action spec: {env.action_spec}")
 
-    # Create models
-    actor, critic = make_ppo_models(env, device=device)
+    # Create models (MAPPO: actor uses local obs, critic uses global state)
+    actor, critic = make_mappo_models(env, device=device)
 
     # Create GAE module
     adv_module = GAE(

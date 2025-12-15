@@ -85,6 +85,8 @@ def make_actor(env, device="cpu", return_log_prob=True):
 def make_critic(env, device="cpu"):
     """Create critic (value) network for PPO.
 
+    Uses local observation - suitable for independent PPO.
+
     Args:
         env: The environment to create the critic for.
         device: Device to place the model on.
@@ -111,8 +113,48 @@ def make_critic(env, device="cpu"):
     return critic.to(device)
 
 
+def make_mappo_critic(env, device="cpu"):
+    """Create centralized critic for MAPPO (CTDE).
+
+    Uses global state for centralized training with decentralized execution.
+    The global state contains full observability:
+        - All rescuer positions: num_rescuers * 2
+        - All rescuer velocities: num_rescuers * 2
+        - All victim positions: num_missing * 2
+        - All victim states: num_missing * 1
+        - All tree positions: num_trees * 2
+        - All safe zone positions: num_safe_zones * 2
+
+    Args:
+        env: The environment to create the critic for.
+        device: Device to place the model on.
+
+    Returns:
+        ValueOperator module that uses "state" key.
+    """
+    state_dim = env.observation_spec["state"].shape[-1]
+
+    critic_net = nn.Sequential(
+        nn.Linear(state_dim, 256),
+        nn.Tanh(),
+        nn.Linear(256, 256),
+        nn.Tanh(),
+        nn.Linear(256, 1),
+    )
+
+    critic = ValueOperator(
+        module=critic_net,
+        in_keys=["state"],  # Uses global state, not local observation
+        out_keys=["state_value"],
+    )
+
+    return critic.to(device)
+
+
 def make_ppo_models(env, device="cpu"):
     """Create actor and critic networks for PPO.
+
+    Uses local observations for both actor and critic.
 
     Args:
         env: The environment to create models for.
@@ -123,4 +165,22 @@ def make_ppo_models(env, device="cpu"):
     """
     actor = make_actor(env, device=device, return_log_prob=True)
     critic = make_critic(env, device=device)
+    return actor, critic
+
+
+def make_mappo_models(env, device="cpu"):
+    """Create actor and critic networks for MAPPO (CTDE).
+
+    Actor uses local observation (decentralized execution).
+    Critic uses global state (centralized training).
+
+    Args:
+        env: The environment to create models for.
+        device: Device to place models on.
+
+    Returns:
+        Tuple of (actor, critic) modules.
+    """
+    actor = make_actor(env, device=device, return_log_prob=True)
+    critic = make_mappo_critic(env, device=device)
     return actor, critic

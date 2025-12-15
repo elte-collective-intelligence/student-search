@@ -161,7 +161,7 @@ class SearchAndRescueEnv(EnvBase):
 
     def _make_specs(self):
         """Define observation and action specs."""
-        # Observation components:
+        # Observation components (per-agent, partial observability):
         # - own velocity (2)
         # - own position (2)
         # - closest N landmarks relative positions (N*2)
@@ -176,6 +176,22 @@ class SearchAndRescueEnv(EnvBase):
             + self.num_missing * 3  # victim positions + state
         )
 
+        # Global state components (for CTDE critic - full observability):
+        # - all rescuer positions: num_rescuers * 2
+        # - all rescuer velocities: num_rescuers * 2
+        # - all victim positions: num_missing * 2
+        # - all victim states: num_missing * 1
+        # - all tree positions: num_trees * 2
+        # - all safe zone positions: num_safe_zones * 2
+        self.global_state_size = (
+            self.num_rescuers * 2  # all rescuer positions
+            + self.num_rescuers * 2  # all rescuer velocities
+            + self.num_missing * 2  # all victim positions
+            + self.num_missing * 1  # all victim states
+            + self.num_trees * 2  # all tree positions
+            + self.num_safe_zones * 2  # all safe zone positions
+        )
+
         # Visibility mask sizes
         vis_mask_rescuers_size = max(self.num_rescuers - 1, 0)
         vis_mask_victims_size = self.num_missing
@@ -184,12 +200,23 @@ class SearchAndRescueEnv(EnvBase):
         obs_low = -3.0
         obs_high = 3.0
 
-        # Observation spec - single agent observation with visibility masks
+        # Global state bounds (absolute positions bounded by world size)
+        state_low = -2.0
+        state_high = 2.0
+
+        # Observation spec - single agent observation with visibility masks + global state
         self.observation_spec = Composite(
             observation=Bounded(
                 low=obs_low,
                 high=obs_high,
                 shape=(obs_size,),
+                dtype=torch.float32,
+                device=self.device,
+            ),
+            state=Bounded(
+                low=state_low,
+                high=state_high,
+                shape=(self.global_state_size,),
                 dtype=torch.float32,
                 device=self.device,
             ),
@@ -309,10 +336,16 @@ class SearchAndRescueEnv(EnvBase):
         # Get observation for main rescuer
         obs, vis_mask_rescuers, vis_mask_victims = self._get_observation(self.agents[0])
 
+        # Get global state for CTDE critic
+        global_state = self._get_global_state()
+
         return TensorDict(
             {
                 "observation": torch.tensor(
                     obs, dtype=torch.float32, device=self.device
+                ),
+                "state": torch.tensor(
+                    global_state, dtype=torch.float32, device=self.device
                 ),
                 "vis_mask_rescuers": torch.tensor(
                     vis_mask_rescuers, dtype=torch.float32, device=self.device
@@ -366,6 +399,9 @@ class SearchAndRescueEnv(EnvBase):
         # Get new observation
         obs, vis_mask_rescuers, vis_mask_victims = self._get_observation(main_rescuer)
 
+        # Get global state for CTDE critic
+        global_state = self._get_global_state()
+
         # Increment step counter
         self._step_count += 1
 
@@ -379,6 +415,9 @@ class SearchAndRescueEnv(EnvBase):
             {
                 "observation": torch.tensor(
                     obs, dtype=torch.float32, device=self.device
+                ),
+                "state": torch.tensor(
+                    global_state, dtype=torch.float32, device=self.device
                 ),
                 "vis_mask_rescuers": torch.tensor(
                     vis_mask_rescuers, dtype=torch.float32, device=self.device
@@ -671,6 +710,60 @@ class SearchAndRescueEnv(EnvBase):
             np.array(vis_mask_rescuers, dtype=np.float32),
             np.array(vis_mask_victims, dtype=np.float32),
         )
+
+    def _get_global_state(self) -> np.ndarray:
+        """
+        Get global state for CTDE (Centralized Training with Decentralized Execution).
+
+        This provides full observability for the centralized critic during training,
+        while actors only see their local observations.
+
+        Global State Shape (fixed):
+            - All rescuer positions: num_rescuers * 2
+            - All rescuer velocities: num_rescuers * 2
+            - All victim positions: num_missing * 2
+            - All victim states: num_missing * 1  (0=idle, 1=follow, 2=stop)
+            - All tree positions: num_trees * 2
+            - All safe zone positions: num_safe_zones * 2
+
+        Total size: self.global_state_size
+
+        Returns:
+            np.ndarray: Global state vector (shape: global_state_size,)
+        """
+        state_components = []
+
+        # All rescuer positions (absolute)
+        for agent in self.agents:
+            state_components.append(agent.p_pos)
+
+        # All rescuer velocities
+        for agent in self.agents:
+            state_components.append(agent.p_vel)
+
+        # All victim positions (absolute)
+        for victim in self.victims:
+            state_components.append(victim.p_pos)
+
+        # All victim states
+        victim_states = np.array([float(v.state.value) for v in self.victims])
+        state_components.append(victim_states)
+
+        # All tree positions
+        for landmark in self.landmarks:
+            if landmark.tree:
+                state_components.append(landmark.p_pos)
+
+        # All safe zone positions
+        for landmark in self.landmarks:
+            if not landmark.tree and not landmark.boundary:
+                state_components.append(landmark.p_pos)
+
+        # Concatenate and clip to bounds
+        global_state = np.concatenate(state_components)
+        global_state = np.clip(global_state, -2.0, 2.0)
+
+        return global_state.astype(np.float32)
 
     def _get_reward(self, agent) -> float:
         """Calculate reward for rescuer agent."""
