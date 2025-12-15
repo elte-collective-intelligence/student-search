@@ -13,7 +13,7 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
 from src.sar_env import SearchAndRescueEnv
-from src.models import make_mappo_models
+from src.models import make_ppo_models, make_mappo_models
 
 
 def make_env(env_kwargs, device="cpu"):
@@ -34,9 +34,19 @@ def train(
     batch_size: int = 256,
     seed: int = 0,
     save_folder: str = "search_rescue_logs/",
+    algorithm: str = "mappo",
     **env_kwargs,
 ):
-    """Train a PPO agent on the search and rescue environment."""
+    """Train a PPO/MAPPO agent on the search and rescue environment.
+
+    Args:
+        steps: Total training steps.
+        batch_size: Batch size for training.
+        seed: Random seed.
+        save_folder: Folder to save logs and models.
+        algorithm: "ppo" (local critic) or "mappo" (CTDE with global state critic).
+        **env_kwargs: Environment configuration.
+    """
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")
@@ -49,12 +59,20 @@ def train(
     check_env_specs(env)
 
     print(f"Starting training on {env.base_env.metadata['name']}.")
+    print(f"Algorithm: {algorithm.upper()}")
     print(f"Observation shape: {env.observation_spec['observation'].shape}")
     print(f"Global state shape: {env.observation_spec['state'].shape}")
     print(f"Action spec: {env.action_spec}")
 
-    # Create models (MAPPO: actor uses local obs, critic uses global state)
-    actor, critic = make_mappo_models(env, device=device)
+    # Create models based on algorithm choice
+    if algorithm.lower() == "mappo":
+        # MAPPO: actor uses local obs, critic uses global state (CTDE)
+        actor, critic = make_mappo_models(env, device=device)
+        print("Critic using: global state (CTDE)")
+    else:
+        # PPO: both actor and critic use local observation
+        actor, critic = make_ppo_models(env, device=device)
+        print("Critic using: local observation")
 
     # Create GAE module
     adv_module = GAE(

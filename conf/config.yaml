@@ -3,10 +3,11 @@ env:
   rescuers: 10
   trees: 8
   safe_zones: 4
-  max_cycles: 120
+  max_cycles: 300
   continuous_actions: false
 train:
   active: false
+  algorithm: "mappo"  # "ppo" or "mappo" (CTDE)
   total_timesteps: 4000000
   eval_freq: 1000
   batch_size: 2048
