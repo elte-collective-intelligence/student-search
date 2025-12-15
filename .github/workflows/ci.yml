@@ -24,4 +24,8 @@ jobs:
         run: flake8 src/ tests/
 
       - name: Pytest
+        env:
+          PYTHONPATH: ${{ github.workspace }}/src
+          SDL_VIDEODRIVER: dummy
+          SDL_AUDIODRIVER: dummy
         run: pytest --maxfail=1 --disable-warnings -q
