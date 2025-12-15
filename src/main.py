@@ -7,8 +7,8 @@ import subprocess
 import hydra
 from omegaconf import DictConfig
 
-from eval import evaluate
-from train import train
+from src.eval import evaluate
+from src.train import train
 
 
 def launch_tensorboard(log_dir: str, port: int = 6006):

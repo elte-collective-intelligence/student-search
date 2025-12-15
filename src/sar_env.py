@@ -12,9 +12,9 @@ Victims are environmental entities (not agents) with three states:
 """
 from __future__ import annotations
 
-from victim import VictimState, Victim
-from agent import Agent
-from landmark import Landmark
+from src.victim import VictimState, Victim
+from src.agent import Agent
+from src.landmark import Landmark
 import numpy as np
 import torch
 import pygame

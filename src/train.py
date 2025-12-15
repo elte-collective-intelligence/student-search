@@ -12,8 +12,8 @@ from torchrl.objectives.value import GAE
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
-from sar_env import SearchAndRescueEnv
-from models import make_ppo_models
+from src.sar_env import SearchAndRescueEnv
+from src.models import make_ppo_models
 
 
 def make_env(env_kwargs, device="cpu"):
