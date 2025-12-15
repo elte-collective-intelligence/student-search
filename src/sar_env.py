@@ -12,7 +12,9 @@ Victims are environmental entities (not agents) with three states:
 """
 from __future__ import annotations
 
-from enum import Enum
+from victim import VictimState, Victim
+from agent import Agent
+from landmark import Landmark
 import numpy as np
 import torch
 import pygame
@@ -20,72 +22,6 @@ from tensordict import TensorDict
 from torchrl.envs import EnvBase
 from torchrl.data import Bounded, Unbounded, Categorical, Composite
 from typing import Optional, Union
-
-
-class VictimState(Enum):
-    """States for victim entities."""
-
-    IDLE = 0  # Waiting to be found
-    FOLLOW = 1  # Following a rescuer
-    STOP = 2  # Saved at safe zone
-
-
-class Agent:
-    """Rescuer agent entity in the environment."""
-
-    def __init__(self):
-        self.name = ""
-        self.collide = True
-        self.silent = True
-        self.size = 0.025
-        self.accel = 3.0
-        self.max_speed = 0.3
-        self.color = np.array([0.85, 0.35, 0.35])  # Rescuer color
-        # State
-        self.p_pos = np.zeros(2)  # Position
-        self.p_vel = np.zeros(2)  # Velocity
-        self.c = np.zeros(2)  # Communication
-
-
-class Victim:
-    """Victim entity in the environment (not an agent - environmental entity)."""
-
-    def __init__(self):
-        self.name = ""
-        self.collide = True
-        self.size = 0.015
-        self.speed = 0.2  # Following speed
-        self.type = None  # Victim type (A, B, C, D)
-        self.color = np.array([0.0, 0.0, 0.0])
-        # State
-        self.state = VictimState.IDLE  # Victim state (idle, follow, stop)
-        self.following_agent = None  # Which agent the victim is following
-        self.action_u = None
-        self.p_pos = np.zeros(2)  # Position
-        self.p_vel = np.zeros(2)  # Velocity
-        self.c = np.zeros(2)  # Communication
-
-    @property
-    def is_saved(self):
-        """Check if the victim has been saved (reached safe zone)."""
-        return self.state is VictimState.STOP
-
-
-class Landmark:
-    """Landmark entity in the environment (trees or safe zones)."""
-
-    def __init__(self):
-        self.name = ""
-        self.tree = False
-        self.collide = False
-        self.movable = False
-        self.size = 0.03
-        self.boundary = False
-        self.type = None  # Safe zone type (A, B, C, D)
-        self.color = np.array([0.0, 0.0, 0.0])
-        # State
-        self.p_pos = np.zeros(2)
-        self.p_vel = np.zeros(2)
 
 
 class SearchAndRescueEnv(EnvBase):
@@ -1049,13 +985,3 @@ class SearchAndRescueEnv(EnvBase):
 def make_env(**kwargs):
     """Create a SearchAndRescueEnv instance."""
     return SearchAndRescueEnv(**kwargs)
-
-
-def env(**kwargs):
-    """Alias for make_env."""
-    return make_env(**kwargs)
-
-
-def parallel_env(**kwargs):
-    """Create environment (single-agent wrapper for compatibility)."""
-    return make_env(**kwargs)
