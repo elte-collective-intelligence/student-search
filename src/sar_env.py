@@ -18,7 +18,7 @@ import torch
 import pygame
 from tensordict import TensorDict
 from torchrl.envs import EnvBase
-from torchrl.data import BoundedTensorSpec, Unbounded, Categorical, Composite
+from torchrl.data import Bounded, Unbounded, Categorical, Composite
 from typing import Optional, Union
 
 
@@ -58,6 +58,8 @@ class Victim:
         self.type = None  # Victim type (A, B, C, D)
         self.color = np.array([0.0, 0.0, 0.0])
         # State
+        self.state = VictimState.IDLE  # Victim state (idle, follow, stop)
+        self.following_agent = None  # Which agent the victim is following
         self.action_u = None
         self.p_pos = np.zeros(2)  # Position
         self.p_vel = np.zeros(2)  # Velocity
@@ -224,19 +226,43 @@ class SearchAndRescueEnv(EnvBase):
         # - closest N landmarks relative positions (N*2)
         # - other rescuers relative positions (num_rescuers-1)*2
         # - victims relative positions + state (num_missing * 3) [x, y, state]
-        n_closest_landmarks = 3
+        self.n_closest_landmarks = 3
         obs_size = (
             2  # own velocity
             + 2  # own position
-            + n_closest_landmarks * 2  # closest landmark positions
+            + self.n_closest_landmarks * 2  # closest landmark positions
             + (self.num_rescuers - 1) * 2  # other rescuer positions
             + self.num_missing * 3  # victim positions + state
         )
 
-        # Observation spec - single agent observation
+        # Visibility mask sizes
+        vis_mask_rescuers_size = max(self.num_rescuers - 1, 0)
+        vis_mask_victims_size = self.num_missing
+
+        # Observation bounds (positions are relative, bounded by ~2x world size)
+        obs_low = -3.0
+        obs_high = 3.0
+
+        # Observation spec - single agent observation with visibility masks
         self.observation_spec = Composite(
-            observation=Unbounded(
+            observation=Bounded(
+                low=obs_low,
+                high=obs_high,
                 shape=(obs_size,),
+                dtype=torch.float32,
+                device=self.device,
+            ),
+            vis_mask_rescuers=Bounded(
+                low=0.0,
+                high=1.0,
+                shape=(vis_mask_rescuers_size,),
+                dtype=torch.float32,
+                device=self.device,
+            ),
+            vis_mask_victims=Bounded(
+                low=0.0,
+                high=1.0,
+                shape=(vis_mask_victims_size,),
                 dtype=torch.float32,
                 device=self.device,
             ),
@@ -246,7 +272,7 @@ class SearchAndRescueEnv(EnvBase):
         # Action spec
         if self.continuous_actions:
             # Continuous: 2D force vector
-            self.action_spec = BoundedTensorSpec(
+            self.action_spec = Bounded(
                 low=-1.0,
                 high=1.0,
                 shape=(2,),
@@ -340,12 +366,18 @@ class SearchAndRescueEnv(EnvBase):
             landmark.p_vel = np.zeros(self.dim_p)
 
         # Get observation for main rescuer
-        obs = self._get_observation(self.agents[0])
+        obs, vis_mask_rescuers, vis_mask_victims = self._get_observation(self.agents[0])
 
         return TensorDict(
             {
                 "observation": torch.tensor(
                     obs, dtype=torch.float32, device=self.device
+                ),
+                "vis_mask_rescuers": torch.tensor(
+                    vis_mask_rescuers, dtype=torch.float32, device=self.device
+                ),
+                "vis_mask_victims": torch.tensor(
+                    vis_mask_victims, dtype=torch.float32, device=self.device
                 ),
                 "done": torch.tensor([False], dtype=torch.bool, device=self.device),
                 "terminated": torch.tensor(
@@ -391,7 +423,7 @@ class SearchAndRescueEnv(EnvBase):
         reward = self._get_reward(main_rescuer)
 
         # Get new observation
-        obs = self._get_observation(main_rescuer)
+        obs, vis_mask_rescuers, vis_mask_victims = self._get_observation(main_rescuer)
 
         # Increment step counter
         self._step_count += 1
@@ -406,6 +438,12 @@ class SearchAndRescueEnv(EnvBase):
             {
                 "observation": torch.tensor(
                     obs, dtype=torch.float32, device=self.device
+                ),
+                "vis_mask_rescuers": torch.tensor(
+                    vis_mask_rescuers, dtype=torch.float32, device=self.device
+                ),
+                "vis_mask_victims": torch.tensor(
+                    vis_mask_victims, dtype=torch.float32, device=self.device
                 ),
                 "reward": torch.tensor(
                     [reward], dtype=torch.float32, device=self.device
@@ -617,8 +655,15 @@ class SearchAndRescueEnv(EnvBase):
             penetration = dist_min - dist
             victim.p_pos += direction * penetration
 
-    def _get_observation(self, agent) -> np.ndarray:
-        """Get observation for an agent."""
+    def _get_observation(self, agent) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Get observation for an agent.
+
+        Returns:
+            obs: The observation vector (bounded, no sentinel values)
+            vis_mask_rescuers: Visibility mask for other rescuers (1=visible, 0=hidden)
+            vis_mask_victims: Visibility mask for victims (1=visible, 0=hidden)
+        """
         # Calculate distances to each landmark
         landmark_distances = []
         for landmark in self.landmarks:
@@ -629,48 +674,62 @@ class SearchAndRescueEnv(EnvBase):
                     landmark_distances.append((dist, delta_pos))
 
         # Sort by distance and take N closest
-        n_closest = 3
+        n_closest = self.n_closest_landmarks
         landmark_distances.sort(key=lambda x: x[0])
         closest_landmarks = landmark_distances[:n_closest]
 
-        # Pad if not enough landmarks
+        # Pad if not enough landmarks (use zeros for masked/missing landmarks)
         entity_pos = [pos for _, pos in closest_landmarks]
         while len(entity_pos) < n_closest:
             entity_pos.append(np.zeros(2))
 
-        # Other rescuer positions (relative)
+        # Other rescuer positions (relative) with visibility mask
         other_rescuer_pos = []
+        vis_mask_rescuers = []
         for other in self.agents:
             if other is agent:
                 continue
 
-            if (
-                self._is_blocked_by_obstacle_pos(agent.p_pos, other.p_pos)
-                or self._get_distance_pos(agent.p_pos, other.p_pos) > self.vision
-            ):
-                other_rescuer_pos.append(np.array([1e6, 1e6]))
-            else:
-                other_rescuer_pos.append(other.p_pos - agent.p_pos)
+            dist = self._get_distance_pos(agent.p_pos, other.p_pos)
+            is_blocked = self._is_blocked_by_obstacle_pos(agent.p_pos, other.p_pos)
+            is_visible = (dist <= self.vision) and (not is_blocked)
 
-        # Victim info: relative position + state
-        victim_info = []
-        for victim in self.victims:
-            if (
-                self._is_blocked_by_obstacle_pos(agent.p_pos, victim.p_pos)
-                or self._get_distance_pos(agent.p_pos, victim.p_pos) > self.vision
-            ):
-                victim_info.append(np.array([1e6, 1e6, -1.0]))  # Hidden
+            if is_visible:
+                other_rescuer_pos.append(other.p_pos - agent.p_pos)
+                vis_mask_rescuers.append(1.0)
             else:
+                # Use zeros instead of sentinel values
+                other_rescuer_pos.append(np.zeros(2))
+                vis_mask_rescuers.append(0.0)
+
+        # Victim info: relative position + state with visibility mask
+        victim_info = []
+        vis_mask_victims = []
+        for victim in self.victims:
+            dist = self._get_distance_pos(agent.p_pos, victim.p_pos)
+            is_blocked = self._is_blocked_by_obstacle_pos(agent.p_pos, victim.p_pos)
+            is_visible = (dist <= self.vision) and (not is_blocked)
+
+            if is_visible:
                 rel_pos = victim.p_pos - agent.p_pos
                 state_val = float(victim.state.value)  # 0=idle, 1=follow, 2=stop
                 victim_info.append(np.array([rel_pos[0], rel_pos[1], state_val]))
+                vis_mask_victims.append(1.0)
+            else:
+                # Use zeros instead of sentinel values
+                victim_info.append(np.zeros(3))
+                vis_mask_victims.append(0.0)
 
         # Concatenate observation
         obs = np.concatenate(
             [agent.p_vel] + [agent.p_pos] + entity_pos + other_rescuer_pos + victim_info
         )
 
-        return obs.astype(np.float32)
+        return (
+            obs.astype(np.float32),
+            np.array(vis_mask_rescuers, dtype=np.float32),
+            np.array(vis_mask_victims, dtype=np.float32),
+        )
 
     def _get_reward(self, agent) -> float:
         """Calculate reward for rescuer agent."""
@@ -747,29 +806,64 @@ class SearchAndRescueEnv(EnvBase):
         return dist < dist_min
 
     def _is_blocked_by_obstacle_pos(self, pos_a, pos_b) -> bool:
-        """Check if line of sight is blocked by a tree."""
+        """Check if line of sight is blocked by a tree.
+
+        Only returns True if a tree is actually BETWEEN pos_a and pos_b,
+        not if it's behind either endpoint.
+        """
         for landmark in self.landmarks:
             if landmark.tree:
-                if self._line_intersects_circle(
+                if self._line_segment_intersects_circle(
                     pos_a, pos_b, landmark.p_pos, landmark.size
                 ):
                     return True
         return False
 
     @staticmethod
-    def _line_intersects_circle(p1, p2, center, radius) -> bool:
-        """Check if line segment intersects a circle."""
-        p1_rel = p1 - center
-        p2_rel = p2 - center
+    def _line_segment_intersects_circle(p1, p2, center, radius) -> bool:
+        """
+        Check if line SEGMENT (not infinite line) intersects a circle.
 
-        dx, dy = p2_rel - p1_rel
-        dr_sq = dx**2 + dy**2
-        if dr_sq == 0:
-            return np.linalg.norm(p1_rel) < radius
-        d = p1_rel[0] * p2_rel[1] - p2_rel[0] * p1_rel[1]
+        Uses parametric form: P(t) = p1 + t*(p2-p1) for t in [0,1]
+        Checks if the closest point on the segment to the circle center
+        is within the radius.
+        """
+        # Direction vector from p1 to p2
+        d = p2 - p1
+        f = p1 - center  # Vector from circle center to p1
 
-        discriminant = radius**2 * dr_sq - d**2
-        return discriminant >= 0
+        a = np.dot(d, d)
+        b = 2 * np.dot(f, d)
+        c = np.dot(f, f) - radius * radius
+
+        # Handle degenerate case (p1 == p2)
+        if a < 1e-10:
+            return np.linalg.norm(f) <= radius
+
+        discriminant = b * b - 4 * a * c
+
+        if discriminant < 0:
+            # No intersection with infinite line
+            return False
+
+        discriminant = np.sqrt(discriminant)
+
+        # Two intersection points with infinite line at t1 and t2
+        t1 = (-b - discriminant) / (2 * a)
+        t2 = (-b + discriminant) / (2 * a)
+
+        # Check if either intersection point is within segment bounds [0, 1]
+        # Or if the segment is entirely inside the circle
+        if 0 <= t1 <= 1:
+            return True
+        if 0 <= t2 <= 1:
+            return True
+
+        # Check if segment is entirely inside circle (both t values outside [0,1] but circle contains segment)
+        if t1 < 0 and t2 > 1:
+            return True
+
+        return False
 
     @staticmethod
     def _get_distance_pos(pos_a, pos_b) -> float:
@@ -785,6 +879,24 @@ class SearchAndRescueEnv(EnvBase):
     def trees(self):
         """Get list of tree landmarks."""
         return [lm for lm in self.landmarks if lm.tree]
+
+    @property
+    def rescuers(self):
+        """Get list of rescuer agents (alias for agents)."""
+        return self.agents
+
+    @property
+    def num_agents(self):
+        """Get number of agents (rescuers)."""
+        return len(self.agents)
+
+    def _get_distance(self, entity_a, entity_b) -> float:
+        """Calculate distance between two entities."""
+        return self._get_distance_pos(entity_a.p_pos, entity_b.p_pos)
+
+    def _is_blocked_by_obstacle(self, entity_a, entity_b) -> bool:
+        """Check if line of sight between two entities is blocked by a tree."""
+        return self._is_blocked_by_obstacle_pos(entity_a.p_pos, entity_b.p_pos)
 
     def render(self):
         """Render the environment."""
@@ -912,7 +1024,12 @@ class SearchAndRescueEnv(EnvBase):
     # ---- Public helpers (avoid protected-member access from outside) ----
     def is_collision(self, entity_a, entity_b) -> bool:
         """Public wrapper for collision check."""
-        return self._is_collision(entity_a, entity_b)
+        return self._is_collision_pos(
+            pos_a=entity_a.p_pos,
+            size_a=entity_a.size,
+            pos_b=entity_b.p_pos,
+            size_b=entity_b.size,
+        )
 
     def bound_penalty(self, pos: np.ndarray) -> float:
         """Public wrapper for boundary penalty."""
