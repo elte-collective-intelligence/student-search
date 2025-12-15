@@ -18,10 +18,10 @@ jobs:
           pip install pytest black flake8
 
       - name: Black (check only)
-        run: black --check src/ test/
+        run: black --check src/ tests/
 
       - name: Flake8
-        run: flake8 src/ test/
+        run: flake8 src/ tests/
 
       - name: Pytest
         run: pytest --maxfail=1 --disable-warnings -q
