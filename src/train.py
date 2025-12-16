@@ -128,15 +128,14 @@ def train(
             print("Reached the requested step budget; stopping data collection.")
             break
 
-        # TODO: Handle this properly with TorchRL's TensorDict slicing when supported
-        # # Truncate the batch to only process effective_frames so we don't compute adv/loss
-        # # on frames that shouldn't count toward the budget. Works for TensorDicts/tensors
-        # if effective_frames < batch_frames:
-        #     try:
-        #         batch = batch[:effective_frames]
-        #     except Exception:
-        #         # Best-effort fallback: flatten then slice
-        #         batch = batch.reshape(-1)[:effective_frames]
+        # Truncate the batch to only process effective_frames so we don't compute adv/loss
+        # on frames that shouldn't count toward the budget. Works for TensorDicts/tensors
+        if effective_frames < batch_frames:
+            try:
+                batch = batch[:effective_frames]
+            except (TypeError, AttributeError, RuntimeError, IndexError):
+                # Best-effort fallback: flatten then slice
+                batch = batch.reshape(-1)[:effective_frames]
 
         # If the final collected batch is larger than needed, only count the needed frames.
         total_frames += effective_frames
