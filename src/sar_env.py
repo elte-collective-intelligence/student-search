@@ -318,7 +318,7 @@ class SearchAndRescueEnv(EnvBase):
             victim.p_pos = self._np_random.uniform(-0.7, 0.7, self.dim_p)
             victim.p_vel = np.zeros(self.dim_p)
             victim.state = VictimState.IDLE
-            victim.following = None
+            victim.following_agent = None
             victim.color = self.TYPE_COLORS[victim.type].copy()
 
         # Reset landmarks
@@ -462,22 +462,22 @@ class SearchAndRescueEnv(EnvBase):
             # Update state based on proximity
             if nearest_rescuer is not None:
                 victim.state = VictimState.FOLLOW
-                victim.following = nearest_rescuer
+                victim.following_agent = nearest_rescuer
             else:
                 # No rescuer in range
                 if victim.state == VictimState.FOLLOW:
                     # Keep following last rescuer if they went out of extended range
-                    if victim.following is not None:
+                    if victim.following_agent is not None:
                         dist_to_following = self._get_distance_pos(
-                            victim.p_pos, victim.following.p_pos
+                            victim.p_pos, victim.following_agent.p_pos
                         )
                         # Stop following if too far (1.5x follow range)
                         if dist_to_following > self.follow_range * 1.5:
                             victim.state = VictimState.IDLE
-                            victim.following = None
+                            victim.following_agent = None
                 else:
                     victim.state = VictimState.IDLE
-                    victim.following = None
+                    victim.following_agent = None
 
     def _move_victims(self):
         """Move victims based on their state."""
@@ -491,9 +491,12 @@ class SearchAndRescueEnv(EnvBase):
                 victim.p_vel = np.zeros(self.dim_p)
                 continue
 
-            if victim.state == VictimState.FOLLOW and victim.following is not None:
+            if (
+                victim.state == VictimState.FOLLOW
+                and victim.following_agent is not None
+            ):
                 # Follow: move towards the rescuer
-                direction = victim.following.p_pos - victim.p_pos
+                direction = victim.following_agent.p_pos - victim.p_pos
                 dist = np.linalg.norm(direction)
 
                 if dist > 0.05:  # Don't get too close
@@ -522,7 +525,7 @@ class SearchAndRescueEnv(EnvBase):
 
                 if dist < self.rescue_range:
                     victim.state = VictimState.STOP
-                    victim.following = None
+                    victim.following_agent = None
                     victim.p_vel = np.zeros(self.dim_p)
                     victim.p_pos = safe_zone.p_pos.copy()  # Snap to safe zone
                     # Dim the color to indicate saved
@@ -966,7 +969,7 @@ class SearchAndRescueEnv(EnvBase):
             _x, _y = to_screen(obj.p_pos)
             _radius = int(obj.size * 350)
             _color = tuple((obj.color * 200).astype(int))
-            pygame.draw.circle(self.screen, _color, (x, y), _radius)
+            pygame.draw.circle(self.screen, _color, (_x, _y), _radius)
             return _x, _y, _radius
 
         # Draw safe zones (background)
@@ -1004,8 +1007,8 @@ class SearchAndRescueEnv(EnvBase):
                 pygame.draw.circle(self.screen, color, (x, y), radius)
                 pygame.draw.circle(self.screen, (255, 255, 255), (x, y), radius, 2)
                 # Draw line to rescuer being followed
-                if victim.following is not None:
-                    rx, ry = to_screen(victim.following.p_pos)
+                if victim.following_agent is not None:
+                    rx, ry = to_screen(victim.following_agent.p_pos)
                     pygame.draw.line(self.screen, (200, 200, 200), (x, y), (rx, ry), 1)
             elif victim.state == VictimState.STOP:
                 # Dimmed circle with checkmark
