@@ -9,11 +9,12 @@ from torchrl.envs import TransformedEnv, Compose, DoubleToFloat, StepCounter
 from torchrl.envs.utils import check_env_specs
 from torchrl.objectives import ClipPPOLoss
 from torchrl.objectives.value import GAE
-from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
-from src.sar_env import SearchAndRescueEnv
-from src.models import make_ppo_models, make_mappo_models
+from src.domain.sar_env import SearchAndRescueEnv
+from src.rl.models import make_ppo_models, make_mappo_models
+from src.infra.config import make_run_context
+from src.infra.logging_tb import TensorboardLogger
 
 
 def make_env(env_kwargs, device="cpu"):
@@ -54,6 +55,14 @@ def train(
     # Create environment
     env_kwargs["seed"] = seed
     env = make_env(env_kwargs, device=device)
+    env_name = getattr(env.base_env, "env_id", type(env.base_env).__name__)
+
+    ctx = make_run_context(
+        save_folder=save_folder,
+        env_name=env_name,
+        algorithm=algorithm,
+        seed=seed,
+    )
 
     # Check environment specs
     check_env_specs(env)
@@ -109,7 +118,7 @@ def train(
     )
 
     # Setup tensorboard
-    writer = SummaryWriter(log_dir=save_folder)
+    logger = TensorboardLogger.create(ctx, enabled=True)  # later: enabled from cfg
 
     # Training loop
     ppo_epochs = 4
@@ -155,13 +164,19 @@ def train(
         # Logging
         reward = batch["next", "reward"].mean().item()
         done_rate = batch["next", "done"].float().mean().item()
-
-        writer.add_scalar("reward/mean", reward, total_frames)
-        writer.add_scalar("done_rate", done_rate, total_frames)
-        writer.add_scalar("loss/total", loss_sum.item(), total_frames)
-
         elapsed = time.time() - start_time
-        fps = total_frames / elapsed
+        fps = total_frames / elapsed if elapsed > 0 else 0.0
+
+        logger.log_dict(
+            "train",
+            {
+                "reward_mean": reward,
+                "done_rate": done_rate,
+                "loss_total": loss_sum.item(),
+                "fps": fps,
+            },
+            total_frames,
+        )
 
         pbar.update(batch.numel())
         pbar.set_postfix(reward=f"{reward:.2f}", fps=f"{fps:.0f}")
@@ -169,18 +184,14 @@ def train(
     pbar.close()
 
     # Save model
-    model_path = f"{save_folder}/{env.base_env.metadata['name']}_{time.strftime('%Y%m%d-%H%M%S')}.pt"
+    model_path = ctx.ckpt_root / f"{ctx.run_id}.pt"
     torch.save(
-        {
-            "actor": actor.state_dict(),
-            "critic": critic.state_dict(),
-        },
-        model_path,
+        {"actor": actor.state_dict(), "critic": critic.state_dict()}, str(model_path)
     )
     print(f"Model saved to {model_path}")
 
-    writer.close()
+    logger.close()
     collector.shutdown()
     env.close()
 
-    print(f"Finished training on {env.base_env.metadata['name']}.")
+    print(f"Finished training on {env_name}.")

@@ -9,9 +9,9 @@ import time
 
 import torch
 
-from src.sar_env import SearchAndRescueEnv
-from src.models import make_actor
-from src.metrics import (
+from src.domain.sar_env import SearchAndRescueEnv
+from src.rl.models import make_actor
+from src.metrics.metrics import (
     EpisodeTracker,
     aggregate_logs,
     compute_summary,
