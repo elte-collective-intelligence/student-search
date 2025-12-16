@@ -29,6 +29,8 @@ Ensure you have Python 3.13 installed and necessary packages for running Petting
     pip install -r requirements.txt
     ```
 
+    This project uses `pygame-ce==2.5.6` (the actively maintained community fork of pygame) for improved compatibility in headless and CI environments.
+
 ## Project Overview
 
 - **Objective**: Simulate a search-and-rescue operation where rescuers lead victims to specific safe zones based on clustering.

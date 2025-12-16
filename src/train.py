@@ -54,11 +54,12 @@ def train(
     # Create environment
     env_kwargs["seed"] = seed
     env = make_env(env_kwargs, device=device)
+    env_name = getattr(env, "env_id", type(env).__name__)
 
     # Check environment specs
     check_env_specs(env)
 
-    print(f"Starting training on {env.base_env.metadata['name']}.")
+    print(f"Starting training on {env_name}.")
     print(f"Algorithm: {algorithm.upper()}")
     print(f"Observation shape: {env.observation_spec['observation'].shape}")
     print(f"Global state shape: {env.observation_spec['state'].shape}")
@@ -119,7 +120,14 @@ def train(
     pbar = tqdm(total=steps, desc="Training", unit="frames")
 
     for i, batch in enumerate(collector):
-        total_frames += batch.numel()
+        if total_frames >= steps:
+            print("Reached the requested step budget; stopping data collection.")
+            break
+
+        batch_frames = batch.numel()
+        remaining = steps - total_frames
+        effective_frames = min(batch_frames, remaining)
+        total_frames += effective_frames
 
         # Compute advantage
         with torch.no_grad():
@@ -161,15 +169,15 @@ def train(
         writer.add_scalar("loss/total", loss_sum.item(), total_frames)
 
         elapsed = time.time() - start_time
-        fps = total_frames / elapsed
+        fps = total_frames / elapsed if elapsed > 0 else 0.0
 
-        pbar.update(batch.numel())
+        pbar.update(effective_frames)
         pbar.set_postfix(reward=f"{reward:.2f}", fps=f"{fps:.0f}")
 
     pbar.close()
 
     # Save model
-    model_path = f"{save_folder}/{env.base_env.metadata['name']}_{time.strftime('%Y%m%d-%H%M%S')}.pt"
+    model_path = f"{save_folder}/{env_name}_{time.strftime('%Y%m%d-%H%M%S')}.pt"
     torch.save(
         {
             "actor": actor.state_dict(),
@@ -183,4 +191,4 @@ def train(
     collector.shutdown()
     env.close()
 
-    print(f"Finished training on {env.base_env.metadata['name']}.")
+    print(f"Finished training on {env_name}.")

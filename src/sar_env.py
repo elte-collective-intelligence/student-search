@@ -966,7 +966,7 @@ class SearchAndRescueEnv(EnvBase):
             _x, _y = to_screen(obj.p_pos)
             _radius = int(obj.size * 350)
             _color = tuple((obj.color * 200).astype(int))
-            pygame.draw.circle(self.screen, _color, (x, y), _radius)
+            pygame.draw.circle(self.screen, _color, (_x, _y), _radius)
             return _x, _y, _radius
 
         # Draw safe zones (background)
@@ -1004,8 +1004,8 @@ class SearchAndRescueEnv(EnvBase):
                 pygame.draw.circle(self.screen, color, (x, y), radius)
                 pygame.draw.circle(self.screen, (255, 255, 255), (x, y), radius, 2)
                 # Draw line to rescuer being followed
-                if victim.following is not None:
-                    rx, ry = to_screen(victim.following.p_pos)
+                if victim.following_agent is not None:
+                    rx, ry = to_screen(victim.following_agent.p_pos)
                     pygame.draw.line(self.screen, (200, 200, 200), (x, y), (rx, ry), 1)
             elif victim.state == VictimState.STOP:
                 # Dimmed circle with checkmark
