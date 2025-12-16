@@ -31,6 +31,27 @@ Ensure you have Python 3.13 installed and necessary packages for running Petting
 
     This project uses `pygame-ce==2.5.6` (the actively maintained community fork of pygame) for improved compatibility in headless and CI environments.
 
+## Dependencies
+
+Pinned versions (see `requirements.txt` for full context):
+
+- Python 3.13
+- black 25.12.0
+- flake8 7.3.0
+- gymnasium 1.2.2
+- hydra-core 1.3.2
+- numpy 2.3.5
+- pygame-ce 2.5.6
+- pytest 9.0.2
+- tensorboard 2.20.0
+- tensorboard-data-server 0.7.2
+- tensordict 0.10.0
+- torch 2.9.1
+- torchrl 0.10.1
+- tqdm 4.67.1
+- pandas 2.3.3
+- matplotlib 3.10.8
+
 ## Project Overview
 
 - **Objective**: Simulate a search-and-rescue operation where rescuers lead victims to specific safe zones based on clustering.
