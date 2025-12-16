@@ -49,6 +49,7 @@ def main(cfg: DictConfig):
         "num_safe_zones": cfg.env.safe_zones,
         "max_cycles": cfg.env.max_cycles,
         "continuous_actions": cfg.env.continuous_actions,
+        "vision_radius": cfg.env.vision_radius,
     }
 
     if cfg.train.active:

@@ -1,6 +1,9 @@
 """
 Evaluation script for the Search and Rescue environment.
-Supports visualization and testing trained models.
+Supports visualization and testing trained MARL models.
+
+CTDE evaluation: Uses trained actors that rely only on local observations
+(decentralized execution) while the policy was trained with centralized critics.
 """
 
 import glob
@@ -25,17 +28,22 @@ def evaluate(
     render_mode=None,
     **env_kwargs,
 ):
-    """Evaluate a trained agent with visualization support."""
+    """Evaluate trained MARL agents with visualization support.
+
+    CTDE evaluation: The policy trained with a centralized critic
+    executes using only local observations (decentralized execution).
+    """
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # Create environment with rendering
     env = SearchAndRescueEnv(render_mode=render_mode, **env_kwargs)
     env_name = getattr(env, "env_id", type(env).__name__)
+    num_agents = env.num_rescuers
 
     print(
-        f"\nStarting evaluation on {env_name} "
-        f"(num_games={num_games}, render_mode={render_mode})"
+        f"\nStarting MARL evaluation on {env_name} "
+        f"(num_games={num_games}, render_mode={render_mode}, num_agents={num_agents})"
     )
 
     # Create actor for loading weights (no log prob needed for eval)
@@ -53,6 +61,10 @@ def evaluate(
                 checkpoint = torch.load(manual_policy_name, map_location=device)
                 actor.load_state_dict(checkpoint["actor"])
                 print(f"Loaded policy: {manual_policy_name}")
+                if "algorithm" in checkpoint:
+                    print(f"  Algorithm: {checkpoint['algorithm']}")
+                if "num_agents" in checkpoint:
+                    print(f"  Trained with {checkpoint['num_agents']} agents")
             else:
                 print(f"Policy '{manual_policy_name}' not found.")
                 env.close()
@@ -70,6 +82,8 @@ def evaluate(
                 checkpoint = torch.load(latest_policy, map_location=device)
                 actor.load_state_dict(checkpoint["actor"])
                 print(f"Loaded the latest policy: {latest_policy}")
+                if "algorithm" in checkpoint:
+                    print(f"  Algorithm: {checkpoint['algorithm']}")
     except Exception as e:
         print(f"Error loading policy: {e}")
         print("Running with random actions instead.")
@@ -91,17 +105,10 @@ def evaluate(
                 env.render()
                 time.sleep(0.05)  # Slow down for visualization
 
-            current_actor = actor
-            if current_actor is not None:
-                actor_core = current_actor.get_submodule("actor")
+            if actor is not None:
+                # Use trained policy (decentralized execution)
                 with torch.no_grad():
-                    out = actor_core(td)
-
-                # ensure action ends up in td
-                if isinstance(out, dict) or hasattr(out, "get"):
-                    td = out
-                else:
-                    td["action"] = out
+                    td = actor(td)
             else:
                 # Random action
                 action = torch.tensor(
@@ -114,7 +121,7 @@ def evaluate(
             # Step environment
             td = env.step(td)
 
-            # Extract results
+            # Extract results (shared team reward in cooperative MARL)
             reward = td["next", "reward"].item()
             done = td["next", "done"].item()
 
@@ -151,7 +158,8 @@ def evaluate(
     plots = plot_core_metrics(df, os.path.join(save_folder, "plots"))
 
     print("\n" + "=" * 50)
-    print("Evaluation Results:")
+    print("MARL Evaluation Results:")
+    print(f"  Number of agents: {num_agents}")
     print(f"  Average reward: {avg_reward:.2f}")
     print(f"  Average rescues: {avg_rescues:.2f}/{len(env.victims)}")
     print(f"  Rescues completed: {summary['rescues_pct']:.1f}%")
@@ -172,8 +180,11 @@ def evaluate(
 def visualize_random(env_kwargs, num_steps=500):
     """Run visualization with random actions for testing."""
     env = SearchAndRescueEnv(render_mode="human", **env_kwargs)
+    num_agents = env.num_rescuers
 
-    print(f"Running random visualization for {num_steps} steps...")
+    print(
+        f"Running random visualization for {num_steps} steps with {num_agents} agents..."
+    )
 
     td = env.reset()
 

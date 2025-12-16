@@ -1,5 +1,12 @@
 """
-Neural network models for PPO training and evaluation.
+Neural network models for MAPPO training and evaluation.
+
+Implements CTDE (Centralized Training with Decentralized Execution):
+- Actor: Uses local observations (decentralized execution)
+- Critic: Uses global state (centralized training)
+
+The environment handles multi-agent coordination internally.
+Training is done on single-agent transitions with a shared policy.
 """
 
 import torch
@@ -9,7 +16,10 @@ from torchrl.modules import ProbabilisticActor, ValueOperator, TanhNormal
 
 
 def make_actor(env, device="cpu", return_log_prob=True):
-    """Create actor network for PPO.
+    """Create actor network for PPO/MAPPO.
+
+    Uses local observation for decentralized execution.
+    The same policy is shared across all agents (parameter sharing).
 
     Args:
         env: The environment to create the actor for.
@@ -25,7 +35,7 @@ def make_actor(env, device="cpu", return_log_prob=True):
     is_continuous = hasattr(action_spec, "low")
 
     if is_continuous:
-        action_dim = action_spec.shape[-1]
+        action_dim = action_spec.shape[-1] if len(action_spec.shape) > 0 else 2
 
         actor_net = nn.Sequential(
             nn.Linear(obs_dim, 256),
@@ -35,8 +45,28 @@ def make_actor(env, device="cpu", return_log_prob=True):
             nn.Linear(256, 2 * action_dim),  # mean and std
         )
 
+        # Split network output into loc and scale
+        class SplitLocScale(nn.Module):
+            def __init__(self, net, action_dim):
+                super().__init__()
+                self.net = net
+                self.action_dim = action_dim
+
+            def forward(self, x):
+                out = self.net(x)
+                loc = out[..., : self.action_dim]
+                scale = (
+                    torch.nn.functional.softplus(
+                        out[..., self.action_dim :]  # noqa: E203
+                    )
+                    + 1e-4
+                )
+                return loc, scale
+
+        split_net = SplitLocScale(actor_net, action_dim)
+
         actor_module = TensorDictModule(
-            actor_net,
+            split_net,
             in_keys=["observation"],
             out_keys=["loc", "scale"],
         )
@@ -85,7 +115,7 @@ def make_actor(env, device="cpu", return_log_prob=True):
 def make_critic(env, device="cpu"):
     """Create critic (value) network for PPO.
 
-    Uses local observation - suitable for independent PPO.
+    Uses local observation - suitable for independent PPO (IPPO).
 
     Args:
         env: The environment to create the critic for.
@@ -152,9 +182,10 @@ def make_mappo_critic(env, device="cpu"):
 
 
 def make_ppo_models(env, device="cpu"):
-    """Create actor and critic networks for PPO.
+    """Create actor and critic networks for PPO (IPPO).
 
     Uses local observations for both actor and critic.
+    This is Independent PPO - each agent learns independently.
 
     Args:
         env: The environment to create models for.
@@ -173,6 +204,10 @@ def make_mappo_models(env, device="cpu"):
 
     Actor uses local observation (decentralized execution).
     Critic uses global state (centralized training).
+
+    This implements the CTDE paradigm:
+    - During training: Critic has access to global state for better value estimation
+    - During execution: Actors only use local observations
 
     Args:
         env: The environment to create models for.

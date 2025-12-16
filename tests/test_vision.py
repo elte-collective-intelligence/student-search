@@ -3,7 +3,9 @@ import numpy as np
 
 def _other_pos_slice(env):
     """Get slice for other rescuer positions in observation vector."""
-    start = 2 + 2 + 6  # vel(2) + pos(2) + landmarks(6)
+    # Observation format: [vel(2), landmarks(6), other_rescuers, victims]
+    # No absolute position anymore (removed for proper partial observability)
+    start = 2 + 6  # vel(2) + landmarks(6)
     end = start + (env.num_agents - 1) * 2
     return slice(start, end)
 
@@ -11,7 +13,12 @@ def _other_pos_slice(env):
 def test_occlusion_blocks_other_agent_in_observation(make_env):
     """Test that trees block vision and visibility masks are set correctly."""
     env = make_env(
-        num_missing=0, num_rescuers=2, num_trees=1, num_safe_zones=0, seed=123
+        num_missing=0,
+        num_rescuers=2,
+        num_trees=1,
+        num_safe_zones=0,
+        seed=123,
+        vision_radius=1.0,  # Use larger vision to test occlusion
     )
 
     resc0, resc1 = env.rescuers[0], env.rescuers[1]
@@ -49,23 +56,28 @@ def test_occlusion_blocks_other_agent_in_observation(make_env):
 def test_vision_radius_masks_distant_entities(make_env):
     """Test that entities beyond vision radius are masked."""
     env = make_env(
-        num_missing=1, num_rescuers=2, num_trees=0, num_safe_zones=0, seed=42
+        num_missing=1,
+        num_rescuers=2,
+        num_trees=0,
+        num_safe_zones=0,
+        seed=42,
+        vision_radius=0.5,  # Explicit vision radius for testing
     )
 
     resc0, resc1 = env.rescuers[0], env.rescuers[1]
     victim = env.victims[0]
 
-    # Place resc1 within vision
+    # Place resc1 and victim within vision (< 0.5)
     resc0.p_pos = np.array([0.0, 0.0])
-    resc1.p_pos = np.array([0.5, 0.0])
-    victim.p_pos = np.array([0.3, 0.0])
+    resc1.p_pos = np.array([0.3, 0.0])
+    victim.p_pos = np.array([0.2, 0.0])
 
     obs, vis_rescuers, vis_victims = env._get_observation(resc0)
     assert vis_rescuers[0] == 1.0  # resc1 visible
     assert vis_victims[0] == 1.0  # victim visible
 
-    # Move resc1 beyond vision radius
-    resc1.p_pos = np.array([2.0, 0.0])  # Beyond vision (default 1.0)
+    # Move resc1 beyond vision radius (> 0.5)
+    resc1.p_pos = np.array([0.7, 0.0])
 
     obs, vis_rescuers, vis_victims = env._get_observation(resc0)
     assert vis_rescuers[0] == 0.0  # resc1 not visible (too far)

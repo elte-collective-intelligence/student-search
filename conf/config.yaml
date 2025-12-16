@@ -1,14 +1,15 @@
 env:
   missing: 4
-  rescuers: 10
+  rescuers: 6
   trees: 8
   safe_zones: 4
   max_cycles: 300
   continuous_actions: false
+  vision_radius: 0.2
 train:
   active: false
-  algorithm: "mappo"  # "ppo" or "mappo" (CTDE)
-  total_timesteps: 4000000
+  algorithm: "mappo" # "ppo" or "mappo" (CTDE)
+  total_timesteps: 10000
   eval_freq: 1000
   batch_size: 2048
   n_epochs: 40

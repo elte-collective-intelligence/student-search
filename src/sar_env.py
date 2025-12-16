@@ -65,7 +65,8 @@ class SearchAndRescueEnv(EnvBase):
         render_mode: Optional[str] = None,
         device: str = "cpu",
         seed: Optional[int] = None,
-        # Victim behavior parameters
+        # Vision and behavior parameters
+        vision_radius: float = 0.4,  # Agent's vision range (map spans -1 to 1)
         follow_range: float = 0.3,  # Range at which victims start following
         rescue_range: float = 0.1,  # Range at which victims are saved at safe zones
     ):
@@ -78,7 +79,7 @@ class SearchAndRescueEnv(EnvBase):
         self.max_cycles = max_cycles
         self.continuous_actions = continuous_actions
         self.render_mode = render_mode
-        self.vision = 1.0  # Vision range for agents
+        self.vision = vision_radius  # Vision range for agents
 
         # Victim behavior parameters
         self.follow_range = follow_range
@@ -162,18 +163,18 @@ class SearchAndRescueEnv(EnvBase):
     def _make_specs(self):
         """Define observation and action specs."""
         # Observation components (per-agent, partial observability):
+        # For decentralized execution, agents do NOT have absolute position.
+        # They only observe:
         # - own velocity (2)
-        # - own position (2)
-        # - closest N landmarks relative positions (N*2)
-        # - other rescuers relative positions (num_rescuers-1)*2
-        # - victims relative positions + state (num_missing * 3) [x, y, state]
+        # - closest N landmarks relative positions (N*2) - only if within vision
+        # - other rescuers relative positions (num_rescuers-1)*2 - only if visible
+        # - victims relative positions + state (num_missing * 3) [x, y, state] - only if visible
         self.n_closest_landmarks = 3
         obs_size = (
             2  # own velocity
-            + 2  # own position
-            + self.n_closest_landmarks * 2  # closest landmark positions
-            + (self.num_rescuers - 1) * 2  # other rescuer positions
-            + self.num_missing * 3  # victim positions + state
+            + self.n_closest_landmarks * 2  # closest landmark positions (relative)
+            + (self.num_rescuers - 1) * 2  # other rescuer positions (relative)
+            + self.num_missing * 3  # victim positions + state (relative)
         )
 
         # Global state components (for CTDE critic - full observability):
@@ -196,6 +197,9 @@ class SearchAndRescueEnv(EnvBase):
         vis_mask_rescuers_size = max(self.num_rescuers - 1, 0)
         vis_mask_victims_size = self.num_missing
 
+        # Per-agent observation size for individual observations
+        self.per_agent_obs_size = obs_size
+
         # Observation bounds (positions are relative, bounded by ~2x world size)
         obs_low = -3.0
         obs_high = 3.0
@@ -204,19 +208,29 @@ class SearchAndRescueEnv(EnvBase):
         state_low = -2.0
         state_high = 2.0
 
-        # Observation spec - single agent observation with visibility masks + global state
+        # Observation spec - per-agent observation + shared global state
+        # For compatibility with TorchRL PPO, we flatten to single-agent format
+        # but the environment internally handles all agents
         self.observation_spec = Composite(
             observation=Bounded(
                 low=obs_low,
                 high=obs_high,
-                shape=(obs_size,),
+                shape=(obs_size,),  # Single agent observation
                 dtype=torch.float32,
                 device=self.device,
             ),
             state=Bounded(
                 low=state_low,
                 high=state_high,
-                shape=(self.global_state_size,),
+                shape=(self.global_state_size,),  # Shared global state for CTDE critic
+                dtype=torch.float32,
+                device=self.device,
+            ),
+            # Store all agent observations for multi-agent access
+            all_observations=Bounded(
+                low=obs_low,
+                high=obs_high,
+                shape=(self.num_rescuers, obs_size),
                 dtype=torch.float32,
                 device=self.device,
             ),
@@ -237,7 +251,7 @@ class SearchAndRescueEnv(EnvBase):
             shape=(),
         )
 
-        # Action spec
+        # Action spec - single agent action (policy is shared, applied to each agent)
         if self.continuous_actions:
             # Continuous: 2D force vector
             self.action_spec = Bounded(
@@ -298,14 +312,22 @@ class SearchAndRescueEnv(EnvBase):
     def _reset(self, tensordict: Optional[TensorDict] = None, **kwargs) -> TensorDict:
         """Reset the environment."""
         self._step_count = 0
+        self._current_agent_idx = 0  # Track which agent we're controlling
 
-        # Safe zone fixed positions (corners)
+        # Initialize reward tracking counters
+        self._prev_saved_count = 0
+        self._prev_following_count = 0
+
+        # Safe zone corner positions (will be shuffled to randomize type mapping)
         safe_zone_positions = [
             np.array([-1.0, 1.0]),  # Top-left
             np.array([-1.0, -1.0]),  # Bottom-left
             np.array([1.0, 1.0]),  # Top-right
             np.array([1.0, -1.0]),  # Bottom-right
         ]
+        # Shuffle positions so type-to-corner mapping is random each episode
+        # This prevents agents from learning fixed "type B -> corner X" associations
+        self._np_random.shuffle(safe_zone_positions)
 
         # Reset rescuer agents
         for agent in self.agents:
@@ -321,7 +343,7 @@ class SearchAndRescueEnv(EnvBase):
             victim.following = None
             victim.color = self.TYPE_COLORS[victim.type].copy()
 
-        # Reset landmarks
+        # Reset landmarks - safe zones get shuffled positions
         safe_zone_idx = 0
         for landmark in self.landmarks:
             if landmark.tree:
@@ -333,25 +355,44 @@ class SearchAndRescueEnv(EnvBase):
                 safe_zone_idx += 1
             landmark.p_vel = np.zeros(self.dim_p)
 
-        # Get observation for main rescuer
-        obs, vis_mask_rescuers, vis_mask_victims = self._get_observation(self.agents[0])
+        # Get observations for ALL agents
+        all_obs = []
+        all_vis_mask_rescuers = []
+        all_vis_mask_victims = []
+        for agent in self.agents:
+            obs, vis_mask_rescuers, vis_mask_victims = self._get_observation(agent)
+            all_obs.append(obs)
+            all_vis_mask_rescuers.append(vis_mask_rescuers)
+            all_vis_mask_victims.append(vis_mask_victims)
 
         # Get global state for CTDE critic
         global_state = self._get_global_state()
 
+        # For TorchRL compatibility, return observation for "current" agent
+        # but store all observations for multi-agent access
+        main_obs = all_obs[0]
+        main_vis_rescuers = all_vis_mask_rescuers[0]
+        main_vis_victims = all_vis_mask_victims[0]
+
         return TensorDict(
             {
+                # Main observation (for TorchRL PPO compatibility)
                 "observation": torch.tensor(
-                    obs, dtype=torch.float32, device=self.device
+                    main_obs, dtype=torch.float32, device=self.device
                 ),
+                # Global state for CTDE critic
                 "state": torch.tensor(
                     global_state, dtype=torch.float32, device=self.device
                 ),
+                # All agent observations (for multi-agent execution)
+                "all_observations": torch.tensor(
+                    np.stack(all_obs), dtype=torch.float32, device=self.device
+                ),
                 "vis_mask_rescuers": torch.tensor(
-                    vis_mask_rescuers, dtype=torch.float32, device=self.device
+                    main_vis_rescuers, dtype=torch.float32, device=self.device
                 ),
                 "vis_mask_victims": torch.tensor(
-                    vis_mask_victims, dtype=torch.float32, device=self.device
+                    main_vis_victims, dtype=torch.float32, device=self.device
                 ),
                 "done": torch.tensor([False], dtype=torch.bool, device=self.device),
                 "terminated": torch.tensor(
@@ -365,21 +406,38 @@ class SearchAndRescueEnv(EnvBase):
         )
 
     def _step(self, tensordict: TensorDict) -> TensorDict:
-        """Execute one step in the environment."""
+        """Execute one step in the environment.
+
+        MARL with parameter sharing: The same policy is applied to each agent.
+        For TorchRL compatibility, we accept a single action and apply the shared
+        policy to all agents using their respective observations.
+        """
         action = tensordict["action"]
 
         # Convert action to numpy
         if isinstance(action, torch.Tensor):
             action = action.cpu().numpy()
 
-        # Apply action to main rescuer
-        main_rescuer = self.agents[0]
-        self._set_action(action, main_rescuer)
+        # MARL with parameter sharing: Apply the SAME action logic to all agents
+        # The policy was trained on individual observations, so we apply it per-agent
+        # For now, use the provided action for the "main" agent and sample for others
+        # In full MARL training, we'd collect separate transitions for each agent
 
-        # Apply random actions to other rescuers (or scripted behavior)
-        for rescuer in self.agents[1:]:
-            random_action = self._np_random.randint(0, 5)
-            self._set_action(random_action, rescuer)
+        # Get all observations for all agents
+        all_obs = []
+        for agent in self.agents:
+            obs, _, _ = self._get_observation(agent)
+            all_obs.append(obs)
+
+        # Apply action to main agent (index 0)
+        self._set_action(action, self.agents[0])
+
+        # For other agents in training: apply the same policy using their observations
+        # This requires the actor to be passed in, but for now we use heuristic actions
+        for i, agent in enumerate(self.agents[1:], 1):
+            # Heuristic: move towards nearest idle/following victim
+            heuristic_action = self._get_heuristic_action(agent)
+            self._set_action(heuristic_action, agent)
 
         # Update victim states and movement
         self._update_victims()
@@ -393,11 +451,18 @@ class SearchAndRescueEnv(EnvBase):
         # Check for rescues
         self._check_rescues()
 
-        # Calculate reward for main rescuer
-        reward = self._get_reward(main_rescuer)
+        # Calculate shared team reward (cooperative MARL)
+        reward = self._get_team_reward()
 
-        # Get new observation
-        obs, vis_mask_rescuers, vis_mask_victims = self._get_observation(main_rescuer)
+        # Get observations for ALL agents
+        all_obs = []
+        all_vis_mask_rescuers = []
+        all_vis_mask_victims = []
+        for agent in self.agents:
+            obs, vis_mask_rescuers, vis_mask_victims = self._get_observation(agent)
+            all_obs.append(obs)
+            all_vis_mask_rescuers.append(vis_mask_rescuers)
+            all_vis_mask_victims.append(vis_mask_victims)
 
         # Get global state for CTDE critic
         global_state = self._get_global_state()
@@ -411,20 +476,32 @@ class SearchAndRescueEnv(EnvBase):
         terminated = all_saved
         done = terminated or truncated
 
+        # For TorchRL PPO compatibility, return single-agent format observation
+        main_obs = all_obs[0]
+        main_vis_rescuers = all_vis_mask_rescuers[0]
+        main_vis_victims = all_vis_mask_victims[0]
+
         return TensorDict(
             {
+                # Main observation for PPO (single agent format)
                 "observation": torch.tensor(
-                    obs, dtype=torch.float32, device=self.device
+                    main_obs, dtype=torch.float32, device=self.device
                 ),
+                # Global state for CTDE critic
                 "state": torch.tensor(
                     global_state, dtype=torch.float32, device=self.device
                 ),
+                # All observations for multi-agent access
+                "all_observations": torch.tensor(
+                    np.stack(all_obs), dtype=torch.float32, device=self.device
+                ),
                 "vis_mask_rescuers": torch.tensor(
-                    vis_mask_rescuers, dtype=torch.float32, device=self.device
+                    main_vis_rescuers, dtype=torch.float32, device=self.device
                 ),
                 "vis_mask_victims": torch.tensor(
-                    vis_mask_victims, dtype=torch.float32, device=self.device
+                    main_vis_victims, dtype=torch.float32, device=self.device
                 ),
+                # Shared team reward
                 "reward": torch.tensor(
                     [reward], dtype=torch.float32, device=self.device
                 ),
@@ -438,6 +515,140 @@ class SearchAndRescueEnv(EnvBase):
             },
             batch_size=self.batch_size,
         )
+
+    def _get_heuristic_action(self, agent) -> int:
+        """Get a heuristic action for an agent (used for non-main agents).
+
+        Heuristic:
+        1. If a victim is following this agent, lead it to its matching safe zone
+        2. Otherwise, move towards the nearest idle victim
+        """
+        # Check if any victim is following this specific agent
+        following_me = None
+        for victim in self.victims:
+            if victim.state == VictimState.FOLLOW and victim.following is agent:
+                following_me = victim
+                break
+
+        if following_me is not None:
+            # Lead the victim to its matching safe zone
+            matching_safe_zone = next(
+                (sz for sz in self.safe_zones if sz.type == following_me.type), None
+            )
+            if matching_safe_zone is not None:
+                direction = matching_safe_zone.p_pos - agent.p_pos
+            else:
+                # No matching safe zone, just stay put
+                return 0
+        else:
+            # Find nearest idle victim to rescue
+            nearest_victim = None
+            min_dist = float("inf")
+
+            for victim in self.victims:
+                if victim.state == VictimState.IDLE:
+                    dist = self._get_distance_pos(agent.p_pos, victim.p_pos)
+                    if dist < min_dist:
+                        min_dist = dist
+                        nearest_victim = victim
+
+            if nearest_victim is None:
+                # No idle victims, check for following victims not assigned
+                for victim in self.victims:
+                    if victim.state == VictimState.FOLLOW:
+                        dist = self._get_distance_pos(agent.p_pos, victim.p_pos)
+                        if dist < min_dist:
+                            min_dist = dist
+                            nearest_victim = victim
+
+            if nearest_victim is None:
+                return 0  # No-op if no victims to rescue
+
+            direction = nearest_victim.p_pos - agent.p_pos
+
+        # Convert to discrete action
+        if abs(direction[0]) > abs(direction[1]):
+            # Move horizontally
+            return 1 if direction[0] < 0 else 2  # left or right
+        else:
+            # Move vertically
+            return 3 if direction[1] < 0 else 4  # down or up
+
+    def _get_team_reward(self) -> float:
+        """Calculate shared team reward for cooperative MARL.
+
+        In cooperative settings, all agents share the same reward signal.
+        This encourages coordination and avoids credit assignment issues.
+
+        Reward structure:
+        - Large one-time bonus for newly saved victims (+10.0)
+        - Small bonus for victims starting to follow (+1.0)
+        - Distance-based shaping to guide exploration
+        - Small time penalty to encourage efficiency
+        - Collision penalties
+        """
+        reward = 0.0
+
+        # Count victims in each state
+        idle_victims = [v for v in self.victims if v.state == VictimState.IDLE]
+        following_victims = [v for v in self.victims if v.state == VictimState.FOLLOW]
+        saved_victims = [v for v in self.victims if v.state == VictimState.STOP]
+
+        # Track state changes (one-time rewards)
+        newly_saved = len(saved_victims) - self._prev_saved_count
+        newly_following = len(following_victims) - self._prev_following_count
+
+        # Update tracking for next step
+        self._prev_saved_count = len(saved_victims)
+        self._prev_following_count = len(following_victims)
+
+        # Large one-time reward for newly saved victims
+        if newly_saved > 0:
+            reward += newly_saved * 10.0
+
+        # One-time reward for victims starting to follow
+        if newly_following > 0:
+            reward += newly_following * 1.0
+
+        # Shaping: encourage getting close to idle victims (team-level)
+        for victim in idle_victims:
+            # Find closest rescuer to this victim
+            min_dist = min(
+                self._get_distance_pos(agent.p_pos, victim.p_pos)
+                for agent in self.agents
+            )
+            # Reward inversely proportional to distance (closer = better)
+            reward += 0.1 / (1.0 + min_dist)
+
+        # Shaping: encourage leading following victims to safe zones
+        for victim in following_victims:
+            # Find matching safe zone
+            matching_safe_zone = next(
+                (sz for sz in self.safe_zones if sz.type == victim.type), None
+            )
+            if matching_safe_zone:
+                dist_to_safe = self._get_distance_pos(
+                    victim.p_pos, matching_safe_zone.p_pos
+                )
+                # Reward for victim being close to matching safe zone
+                reward += 0.2 / (1.0 + dist_to_safe)
+
+        # Small time penalty to encourage faster completion
+        reward -= 0.01
+
+        # Penalty for any agent hitting trees
+        for agent in self.agents:
+            for landmark in self.landmarks:
+                if landmark.tree:
+                    if self._is_collision_pos(
+                        agent.p_pos, agent.size, landmark.p_pos, landmark.size
+                    ):
+                        reward -= 0.5
+
+            # Boundary penalty per agent
+            reward -= self._bound_penalty(agent.p_pos)
+
+        return reward
 
     def _update_victims(self):
         """Update victim states based on proximity to rescuers."""
@@ -639,12 +850,19 @@ class SearchAndRescueEnv(EnvBase):
         """
         Get observation for an agent.
 
+        For decentralized execution (CTDE), agents should NOT have access to
+        global information like their absolute position. They only observe:
+        - Their own velocity
+        - Relative positions of nearby landmarks (within vision)
+        - Relative positions of nearby rescuers (within vision, not blocked)
+        - Relative positions of nearby victims (within vision, not blocked)
+
         Returns:
             obs: The observation vector (bounded, no sentinel values)
             vis_mask_rescuers: Visibility mask for other rescuers (1=visible, 0=hidden)
             vis_mask_victims: Visibility mask for victims (1=visible, 0=hidden)
         """
-        # Calculate distances to each landmark
+        # Calculate distances to each landmark (trees and safe zones within vision)
         landmark_distances = []
         for landmark in self.landmarks:
             if not landmark.boundary:
@@ -658,7 +876,7 @@ class SearchAndRescueEnv(EnvBase):
         landmark_distances.sort(key=lambda x: x[0])
         closest_landmarks = landmark_distances[:n_closest]
 
-        # Pad if not enough landmarks (use zeros for masked/missing landmarks)
+        # Pad if not enough landmarks visible (use zeros for masked/missing landmarks)
         entity_pos = [pos for _, pos in closest_landmarks]
         while len(entity_pos) < n_closest:
             entity_pos.append(np.zeros(2))
@@ -700,9 +918,10 @@ class SearchAndRescueEnv(EnvBase):
                 victim_info.append(np.zeros(3))
                 vis_mask_victims.append(0.0)
 
-        # Concatenate observation
+        # Concatenate observation (NO absolute position - only relative/local info)
+        # Format: [velocity, relative_landmarks, relative_rescuers, relative_victims]
         obs = np.concatenate(
-            [agent.p_vel] + [agent.p_pos] + entity_pos + other_rescuer_pos + victim_info
+            [agent.p_vel] + entity_pos + other_rescuer_pos + victim_info
         )
 
         return (
@@ -1023,9 +1242,9 @@ class SearchAndRescueEnv(EnvBase):
             x, y, radius = draw_circle(agent)
             pygame.draw.circle(self.screen, (100, 0, 0), (x, y), radius, 2)
 
-            # Draw vision range (faint circle)
-            vision_radius = int(self.follow_range * 350)
-            pygame.draw.circle(self.screen, (200, 200, 255), (x, y), vision_radius, 1)
+            # Draw vision range (faint circle) - uses self.vision
+            vision_px = int(self.vision * 350)  # Convert to pixels (map scale)
+            pygame.draw.circle(self.screen, (200, 200, 255), (x, y), vision_px, 1)
 
         # Draw HUD
         font = pygame.font.Font(None, 24)

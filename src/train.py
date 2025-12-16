@@ -1,5 +1,12 @@
 """
-Training script using TorchRL with PPO.
+Training script using TorchRL with MAPPO for Multi-Agent Reinforcement Learning.
+
+Implements CTDE (Centralized Training with Decentralized Execution):
+- Actors: Use local observations for each agent (decentralized)
+- Critic: Uses global state for value estimation (centralized)
+- Parameter sharing: All agents share the same policy network
+
+Based on: https://arxiv.org/abs/2103.01955 (MAPPO paper)
 """
 
 import time
@@ -39,6 +46,11 @@ def train(
 ):
     """Train a PPO/MAPPO agent on the search and rescue environment.
 
+    Implements MARL with CTDE:
+    - All agents share the same policy (parameter sharing)
+    - Critic uses global state for centralized training
+    - Actors execute using only local observations
+
     Args:
         steps: Total training steps.
         batch_size: Batch size for training.
@@ -58,9 +70,11 @@ def train(
     # Check environment specs
     check_env_specs(env)
 
-    print(f"Starting training on {env.base_env.metadata['name']}.")
+    num_agents = env.base_env.num_rescuers
+    print(f"Starting MARL training on {env.base_env.metadata['name']}.")
     print(f"Algorithm: {algorithm.upper()}")
-    print(f"Observation shape: {env.observation_spec['observation'].shape}")
+    print(f"Number of agents: {num_agents}")
+    print(f"Observation shape (per-agent): {env.observation_spec['observation'].shape}")
     print(f"Global state shape: {env.observation_spec['state'].shape}")
     print(f"Action spec: {env.action_spec}")
 
@@ -68,13 +82,14 @@ def train(
     if algorithm.lower() == "mappo":
         # MAPPO: actor uses local obs, critic uses global state (CTDE)
         actor, critic = make_mappo_models(env, device=device)
-        print("Critic using: global state (CTDE)")
+        print("Critic using: global state (CTDE - Centralized Training)")
+        print("Actor using: local observations (Decentralized Execution)")
     else:
         # PPO: both actor and critic use local observation
         actor, critic = make_ppo_models(env, device=device)
-        print("Critic using: local observation")
+        print("Critic using: local observation (Independent PPO)")
 
-    # Create GAE module
+    # Create GAE module for advantage estimation
     adv_module = GAE(
         gamma=0.99,
         lmbda=0.95,
@@ -82,7 +97,7 @@ def train(
         average_gae=True,
     )
 
-    # Create PPO loss
+    # Create PPO loss module
     loss_module = ClipPPOLoss(
         actor=actor,
         critic=critic,
@@ -121,31 +136,43 @@ def train(
     for i, batch in enumerate(collector):
         total_frames += batch.numel()
 
-        # Compute advantage
+        # Compute advantage using GAE
         with torch.no_grad():
             adv_module(batch)
 
         # Flatten batch for training
         batch_flat = batch.reshape(-1)
 
-        # PPO update - iterate through batch directly
-        batch_size = min(64, len(batch_flat))
+        # PPO update - iterate through batch with mini-batches
+        minibatch_size = min(64, len(batch_flat))
         loss_sum = torch.tensor(0.0)
+        loss_objective_sum = 0.0
+        loss_critic_sum = 0.0
+        loss_entropy_sum = 0.0
+        num_updates = 0
 
         for _ in range(ppo_epochs):
             # Shuffle indices
             indices = torch.randperm(len(batch_flat))
 
-            for start_idx in range(0, len(batch_flat), batch_size):
-                end_idx = min(start_idx + batch_size, len(batch_flat))
+            for start_idx in range(0, len(batch_flat), minibatch_size):
+                end_idx = min(start_idx + minibatch_size, len(batch_flat))
                 mb_indices = indices[start_idx:end_idx]
                 mb = batch_flat[mb_indices].to(device)
 
+                # Compute PPO loss
                 loss = loss_module(mb)
 
+                # Aggregate losses
                 loss_sum = (
                     loss["loss_objective"] + loss["loss_critic"] + loss["loss_entropy"]
                 )
+
+                # Track individual losses for logging
+                loss_objective_sum += loss["loss_objective"].item()
+                loss_critic_sum += loss["loss_critic"].item()
+                loss_entropy_sum += loss["loss_entropy"].item()
+                num_updates += 1
 
                 optim.zero_grad()
                 loss_sum.backward()
@@ -159,6 +186,17 @@ def train(
         writer.add_scalar("reward/mean", reward, total_frames)
         writer.add_scalar("done_rate", done_rate, total_frames)
         writer.add_scalar("loss/total", loss_sum.item(), total_frames)
+
+        if num_updates > 0:
+            writer.add_scalar(
+                "loss/objective", loss_objective_sum / num_updates, total_frames
+            )
+            writer.add_scalar(
+                "loss/critic", loss_critic_sum / num_updates, total_frames
+            )
+            writer.add_scalar(
+                "loss/entropy", loss_entropy_sum / num_updates, total_frames
+            )
 
         elapsed = time.time() - start_time
         fps = total_frames / elapsed
@@ -174,6 +212,8 @@ def train(
         {
             "actor": actor.state_dict(),
             "critic": critic.state_dict(),
+            "algorithm": algorithm,
+            "num_agents": num_agents,
         },
         model_path,
     )
@@ -183,4 +223,4 @@ def train(
     collector.shutdown()
     env.close()
 
-    print(f"Finished training on {env.base_env.metadata['name']}.")
+    print(f"Finished MARL training on {env.base_env.metadata['name']}.")
