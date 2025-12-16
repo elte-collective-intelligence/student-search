@@ -55,7 +55,7 @@ def train(
     # Create environment
     env_kwargs["seed"] = seed
     env = make_env(env_kwargs, device=device)
-    env_name = getattr(env.base_env, "env_id", type(env.base_env).__name__)
+    env_name = getattr(env, "env_id", type(env).__name__)
 
     ctx = make_run_context(
         save_folder=save_folder,
@@ -67,7 +67,7 @@ def train(
     # Check environment specs
     check_env_specs(env)
 
-    print(f"Starting training on {env.base_env.metadata['name']}.")
+    print(f"Starting training on {env_name}.")
     print(f"Algorithm: {algorithm.upper()}")
     print(f"Observation shape: {env.observation_spec['observation'].shape}")
     print(f"Global state shape: {env.observation_spec['state'].shape}")
@@ -128,7 +128,25 @@ def train(
     pbar = tqdm(total=steps, desc="Training", unit="frames")
 
     for i, batch in enumerate(collector):
-        total_frames += batch.numel()
+
+        batch_frames = batch.numel()
+        remaining = steps - total_frames
+        effective_frames = min(batch_frames, remaining)
+        if effective_frames <= 0:
+            print("Reached the requested step budget; stopping data collection.")
+            break
+
+        # Truncate the batch to only process effective_frames so we don't compute adv/loss
+        # on frames that shouldn't count toward the budget. Works for TensorDicts/tensors
+        if effective_frames < batch_frames:
+            try:
+                batch = batch[:effective_frames]
+            except (TypeError, AttributeError, RuntimeError, IndexError):
+                # Best-effort fallback: flatten then slice
+                batch = batch.reshape(-1)[:effective_frames]
+
+        # If the final collected batch is larger than needed, only count the needed frames.
+        total_frames += effective_frames
 
         # Compute advantage
         with torch.no_grad():
@@ -178,7 +196,7 @@ def train(
             total_frames,
         )
 
-        pbar.update(batch.numel())
+        pbar.update(effective_frames)
         pbar.set_postfix(reward=f"{reward:.2f}", fps=f"{fps:.0f}")
 
     pbar.close()
