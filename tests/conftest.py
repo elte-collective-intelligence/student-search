@@ -1,7 +1,7 @@
 import os
 import pytest
 
-from src.sar_env import SearchAndRescueEnv
+from src.domain.sar_env import SearchAndRescueEnv
 
 
 @pytest.fixture(autouse=True)

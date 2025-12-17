@@ -7,8 +7,9 @@ import subprocess
 import hydra
 from omegaconf import DictConfig
 
-from src.eval import evaluate
-from src.train import train
+from src.app.eval import evaluate
+from src.app.train import train
+from src.infra.config import to_abs_path
 
 
 def launch_tensorboard(log_dir: str, port: int = 6006):
@@ -27,14 +28,15 @@ def launch_tensorboard(log_dir: str, port: int = 6006):
         print("TensorBoard not found. Install it with: pip install tensorboard")
 
 
-@hydra.main(version_base=None, config_path="../conf", config_name="config")
+@hydra.main(version_base=None, config_path="../../conf", config_name="config")
 def main(cfg: DictConfig):
     # Check for tensorboard mode
     tb_active = cfg.get("tensorboard", {}).get("active", False)
 
     if tb_active:
         launch_tensorboard(
-            log_dir=cfg.save_folder, port=cfg.tensorboard.get("port", 6006)
+            log_dir=str(to_abs_path(cfg.save_folder) / "tensorboard"),
+            port=cfg.tensorboard.get("port", 6006),
         )
         return
 
