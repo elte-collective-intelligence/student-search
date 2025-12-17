@@ -104,7 +104,7 @@ def test_ctde_global_state(make_env):
 
 def test_ctde_architecture(make_env):
     """Test that CTDE architecture is correctly set up."""
-    from src.models import make_mappo_models
+    from src.rl.models import make_mappo_models
 
     env = make_env(
         num_missing=2,
