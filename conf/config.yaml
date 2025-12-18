@@ -1,5 +1,5 @@
 env:
-  missing: 4
+  victims: 4
   rescuers: 6
   trees: 8
   safe_zones: 4
@@ -15,6 +15,7 @@ train:
   n_epochs: 40
   seed: 0
   render_mode: null
+  learning_rate: 0.0003
 eval:
   active: false
   games: 10

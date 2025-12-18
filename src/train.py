@@ -1,225 +1,153 @@
-"""
-Training script using TorchRL with MAPPO for Multi-Agent Reinforcement Learning.
-
-Implements CTDE (Centralized Training with Decentralized Execution):
-- Actors: Use local observations for each agent (decentralized)
-- Critic: Uses global state for value estimation (centralized)
-- Parameter sharing: All agents share the same policy network
-
-Based on: https://arxiv.org/abs/2103.01955 (MAPPO paper)
-"""
-
-import time
 import torch
+from torchrl.envs import check_env_specs
 from torchrl.collectors import SyncDataCollector
-from torchrl.envs import TransformedEnv, Compose, DoubleToFloat, StepCounter
-from torchrl.envs.utils import check_env_specs
-from torchrl.objectives import ClipPPOLoss
-from torchrl.objectives.value import GAE
-from torch.utils.tensorboard import SummaryWriter
-from tqdm import tqdm
+from torchrl.data import ReplayBuffer, LazyTensorStorage, SamplerWithoutReplacement
+from torchrl.objectives import ClipPPOLoss, ValueEstimators
+import tqdm
 
-from src.sar_env import SearchAndRescueEnv
-from src.models import make_ppo_models, make_mappo_models
-
-
-def make_env(env_kwargs, device="cpu"):
-    """Create and wrap the environment."""
-    env = SearchAndRescueEnv(**env_kwargs, device=device)
-    env = TransformedEnv(
-        env,
-        Compose(
-            DoubleToFloat(),
-            StepCounter(),
-        ),
-    )
-    return env
+from src.models import make_policy, make_critic
+from src.sar_env import make_env
 
 
 def train(
     steps: int = 100000,
     batch_size: int = 256,
+    learning_rate: float = 3e-4,
+    num_epochs: int = 10,
+    frames_per_batch: int = 2048,
     seed: int = 0,
     save_folder: str = "search_rescue_logs/",
-    algorithm: str = "mappo",
     **env_kwargs,
 ):
-    """Train a PPO/MAPPO agent on the search and rescue environment.
-
-    Implements MARL with CTDE:
-    - All agents share the same policy (parameter sharing)
-    - Critic uses global state for centralized training
-    - Actors execute using only local observations
-
-    Args:
-        steps: Total training steps.
-        batch_size: Batch size for training.
-        seed: Random seed.
-        save_folder: Folder to save logs and models.
-        algorithm: "ppo" (local critic) or "mappo" (CTDE with global state critic).
-        **env_kwargs: Environment configuration.
-    """
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")
 
     # Create environment
     env_kwargs["seed"] = seed
-    env = make_env(env_kwargs, device=device)
+    env = make_env(device=device, **env_kwargs)
 
     # Check environment specs
     check_env_specs(env)
 
     num_agents = env.base_env.num_rescuers
     print(f"Starting MARL training on {env.base_env.metadata['name']}.")
-    print(f"Algorithm: {algorithm.upper()}")
     print(f"Number of agents: {num_agents}")
     print(f"Observation shape (per-agent): {env.observation_spec['observation'].shape}")
     print(f"Global state shape: {env.observation_spec['state'].shape}")
     print(f"Action spec: {env.action_spec}")
 
-    # Create models based on algorithm choice
-    if algorithm.lower() == "mappo":
-        # MAPPO: actor uses local obs, critic uses global state (CTDE)
-        actor, critic = make_mappo_models(env, device=device)
-        print("Critic using: global state (CTDE - Centralized Training)")
-        print("Actor using: local observations (Decentralized Execution)")
-    else:
-        # PPO: both actor and critic use local observation
-        actor, critic = make_ppo_models(env, device=device)
-        print("Critic using: local observation (Independent PPO)")
+    # 1. Policy Network (Actor) - Decentralized
+    # Input: ("agents", "observation") -> [Batch, n_agents, obs_dim]
+    # Output: ("agents", "loc"), ("agents", "scale")
+    policy = make_policy(env, num_rescuers=num_agents, device=device)
 
-    # Create GAE module for advantage estimation
-    adv_module = GAE(
-        gamma=0.99,
-        lmbda=0.95,
-        value_network=critic,
-        average_gae=True,
-    )
+    # 2. Value Network (Critic) - Centralized
+    # Input: All observations concatenated
+    # Output: Value per agent
+    critic = make_critic(env, num_rescuers=num_agents, device=device)
 
-    # Create PPO loss module
-    loss_module = ClipPPOLoss(
-        actor=actor,
-        critic=critic,
-        clip_epsilon=0.2,
-        entropy_bonus=True,
-        entropy_coeff=0.01,
-        critic_coeff=0.5,
-        loss_critic_type="smooth_l1",
-    )
-
-    # Create optimizer
-    optim = torch.optim.Adam(loss_module.parameters(), lr=3e-4)
-
-    # Create data collector
-    frames_per_batch = min(batch_size, steps // 4)
-    print(f"Batch size (frames per batch): {frames_per_batch}")
     collector = SyncDataCollector(
         env,
-        actor,
+        policy,
         frames_per_batch=frames_per_batch,
         total_frames=steps,
-        split_trajs=False,
         device=device,
     )
 
-    # Setup tensorboard
-    writer = SummaryWriter(log_dir=save_folder)
+    replay_buffer = ReplayBuffer(
+        storage=LazyTensorStorage(frames_per_batch),
+        sampler=SamplerWithoutReplacement(),
+    )
 
-    # Training loop
-    ppo_epochs = 4
-    total_frames = 0
-    start_time = time.time()
+    loss_module = ClipPPOLoss(
+        actor_network=policy,
+        critic_network=critic,
+        clip_epsilon=0.2,
+        entropy_bonus=False,
+        normalize_advantage=True,
+    )
+    loss_module.set_keys(
+        reward=env.reward_key,
+        action=env.action_key,
+        done=("agents", "done"),
+        terminated=("agents", "terminated"),  # TorchRL requires terminated
+        value=("agents", "state_value"),  # Output of critic
+    )
+    loss_module.make_value_estimator(ValueEstimators.GAE, gamma=0.99, lmbda=0.95)
 
-    pbar = tqdm(total=steps, desc="Training", unit="frames")
+    optimizer = torch.optim.Adam(loss_module.parameters(), lr=learning_rate)
 
-    for i, batch in enumerate(collector):
-        total_frames += batch.numel()
+    pbar = tqdm.tqdm(total=steps)
+    rewards_log = []
 
-        # Compute advantage using GAE
+    for batch in collector:
+        # 1. Prepare Batch
+        # Add 'terminated' if missing (older versions of wrappers might miss it)
+        if ("agents", "terminated") not in batch.keys(include_nested=True):
+            batch["agents", "terminated"] = batch["agents", "done"]
+
+        # Compute GAE
         with torch.no_grad():
-            adv_module(batch)
+            loss_module.value_estimator(
+                batch,
+                params=loss_module.critic_network_params,
+                target_params=loss_module.target_critic_network_params,
+            )
 
-        # Flatten batch for training
-        batch_flat = batch.reshape(-1)
+        # Flatten batch time dimensions
+        batch = batch.reshape(-1)
+        replay_buffer.extend(batch)
 
-        # PPO update - iterate through batch with mini-batches
-        minibatch_size = min(64, len(batch_flat))
-        loss_sum = torch.tensor(0.0)
-        loss_objective_sum = 0.0
-        loss_critic_sum = 0.0
-        loss_entropy_sum = 0.0
-        num_updates = 0
+        minibatch_size = 128
 
-        for _ in range(ppo_epochs):
-            # Shuffle indices
-            indices = torch.randperm(len(batch_flat))
+        # 2. PPO Update
+        for _ in range(num_epochs):
+            for _ in range(frames_per_batch // minibatch_size):
+                subdata = replay_buffer.sample(minibatch_size)
+                loss_vals = loss_module(subdata)
 
-            for start_idx in range(0, len(batch_flat), minibatch_size):
-                end_idx = min(start_idx + minibatch_size, len(batch_flat))
-                mb_indices = indices[start_idx:end_idx]
-                mb = batch_flat[mb_indices].to(device)
-
-                # Compute PPO loss
-                loss = loss_module(mb)
-
-                # Aggregate losses
-                loss_sum = (
-                    loss["loss_objective"] + loss["loss_critic"] + loss["loss_entropy"]
+                loss_value = (
+                    loss_vals["loss_objective"]
+                    + loss_vals["loss_critic"]
+                    + loss_vals["loss_entropy"]
                 )
 
-                # Track individual losses for logging
-                loss_objective_sum += loss["loss_objective"].item()
-                loss_critic_sum += loss["loss_critic"].item()
-                loss_entropy_sum += loss["loss_entropy"].item()
-                num_updates += 1
-
-                optim.zero_grad()
-                loss_sum.backward()
+                optimizer.zero_grad()
+                loss_value.backward()
                 torch.nn.utils.clip_grad_norm_(loss_module.parameters(), 1.0)
-                optim.step()
+                optimizer.step()
 
-        # Logging
-        reward = batch["next", "reward"].mean().item()
-        done_rate = batch["next", "done"].float().mean().item()
-
-        writer.add_scalar("reward/mean", reward, total_frames)
-        writer.add_scalar("done_rate", done_rate, total_frames)
-        writer.add_scalar("loss/total", loss_sum.item(), total_frames)
-
-        if num_updates > 0:
-            writer.add_scalar(
-                "loss/objective", loss_objective_sum / num_updates, total_frames
-            )
-            writer.add_scalar(
-                "loss/critic", loss_critic_sum / num_updates, total_frames
-            )
-            writer.add_scalar(
-                "loss/entropy", loss_entropy_sum / num_updates, total_frames
-            )
-
-        elapsed = time.time() - start_time
-        fps = total_frames / elapsed
-
+        # 3. Logging
         pbar.update(batch.numel())
-        pbar.set_postfix(reward=f"{reward:.2f}", fps=f"{fps:.0f}")
+
+        # Check for completed episodes in the batch to log reward
+        # Note: Using next/done to filter
+        done_mask = batch["next", "agents", "done"].any(dim=-1)  # If any agent done
+        if done_mask.any():
+            mean_reward = (
+                batch["next", "agents", "episode_reward"][done_mask].mean().item()
+            )
+            rewards_log.append(mean_reward)
+            pbar.set_description(f"Mean Reward: {mean_reward:.2f}")
+
+        collector.update_policy_weights_()
 
     pbar.close()
 
     # Save model
-    model_path = f"{save_folder}/{env.base_env.metadata['name']}_{time.strftime('%Y%m%d-%H%M%S')}.pt"
-    torch.save(
-        {
-            "actor": actor.state_dict(),
-            "critic": critic.state_dict(),
-            "algorithm": algorithm,
-            "num_agents": num_agents,
-        },
-        model_path,
-    )
-    print(f"Model saved to {model_path}")
+    # model_path = f"{save_folder}/{env.base_env.metadata['name']}_{time.strftime('%Y%m%d-%H%M%S')}.pt"
+    # torch.save(
+    #     {
+    #         "actor": actor.state_dict(),
+    #         "critic": critic.state_dict(),
+    #         "algorithm": algorithm,
+    #         "num_agents": num_agents,
+    #     },
+    #     model_path,
+    # )
+    # print(f"Model saved to {model_path}")
 
-    writer.close()
     collector.shutdown()
     env.close()
 

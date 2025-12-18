@@ -43,7 +43,7 @@ def main(cfg: DictConfig):
     ), "Please specify one of train.active=true or eval.active=true in the arguments."
 
     env_kwargs = {
-        "num_missing": cfg.env.missing,
+        "num_victims": cfg.env.victims,
         "num_rescuers": cfg.env.rescuers,
         "num_trees": cfg.env.trees,
         "num_safe_zones": cfg.env.safe_zones,
@@ -59,7 +59,6 @@ def main(cfg: DictConfig):
             seed=cfg.train.seed,
             render_mode=cfg.train.render_mode,
             save_folder=cfg.save_folder,
-            algorithm=cfg.train.algorithm,
             **env_kwargs,
         )
     elif cfg.eval.active:
