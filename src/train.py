@@ -1,3 +1,6 @@
+import os
+import time
+
 import torch
 from torchrl.envs import check_env_specs
 from torchrl.collectors import SyncDataCollector
@@ -33,8 +36,8 @@ def train(
     num_agents = env.base_env.num_rescuers
     print(f"Starting MARL training on {env.base_env.metadata['name']}.")
     print(f"Number of agents: {num_agents}")
-    print(f"Observation shape (per-agent): {env.observation_spec['observation'].shape}")
-    print(f"Global state shape: {env.observation_spec['state'].shape}")
+    print(f"Observation shape: {env.observation_spec['agents', 'observation'].shape}")
+    # print(f"Global state shape: {env.observation_spec['state'].shape}")
     print(f"Action spec: {env.action_spec}")
 
     # 1. Policy Network (Actor) - Decentralized
@@ -64,8 +67,10 @@ def train(
         actor_network=policy,
         critic_network=critic,
         clip_epsilon=0.2,
-        entropy_bonus=False,
+        entropy_bonus=True,
+        entropy_coeff=0.1,
         normalize_advantage=True,
+        normalize_advantage_exclude_dims=(-1,),
     )
     loss_module.set_keys(
         reward=env.reward_key,
@@ -78,7 +83,7 @@ def train(
 
     optimizer = torch.optim.Adam(loss_module.parameters(), lr=learning_rate)
 
-    pbar = tqdm.tqdm(total=steps)
+    pbar = tqdm.tqdm(total=steps, unit="frames")
     rewards_log = []
 
     for batch in collector:
@@ -135,18 +140,19 @@ def train(
 
     pbar.close()
 
+    os.makedirs(save_folder, exist_ok=True)
+
     # Save model
-    # model_path = f"{save_folder}/{env.base_env.metadata['name']}_{time.strftime('%Y%m%d-%H%M%S')}.pt"
-    # torch.save(
-    #     {
-    #         "actor": actor.state_dict(),
-    #         "critic": critic.state_dict(),
-    #         "algorithm": algorithm,
-    #         "num_agents": num_agents,
-    #     },
-    #     model_path,
-    # )
-    # print(f"Model saved to {model_path}")
+    model_path = f"{save_folder}/{env.base_env.metadata['name']}_{time.strftime('%Y%m%d-%H%M%S')}.pt"
+
+    torch.save(
+        {
+            "policy_state_dict": policy.state_dict(),
+            "critic_state_dict": critic.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+        },
+        model_path,
+    )
 
     collector.shutdown()
     env.close()

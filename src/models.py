@@ -12,10 +12,10 @@ class SplitLayer(nn.Module):
         return x[..., 0, :], x[..., 1, :].exp()  # loc, scale (positive)
 
 
-def _policy_net(
+def make_policy(
     env, num_rescuers: int, device: Union[torch.device, str] = "cpu"
-) -> nn.Module:
-    return nn.Sequential(
+) -> ProbabilisticActor:
+    policy_net = nn.Sequential(
         MultiAgentMLP(
             n_agent_inputs=env.observation_spec["agents", "observation"].shape[-1],
             n_agent_outputs=env.action_spec["agents", "action"].shape[-1]
@@ -32,22 +32,14 @@ def _policy_net(
         nn.Unflatten(-1, (2, env.action_spec["agents", "action"].shape[-1])),
     ).to(device)
 
-
-def _policy_module(
-    env, num_rescuers: int, device: Union[torch.device, str] = "cpu"
-) -> TensorDictModule:
-    return TensorDictModule(
-        module=nn.Sequential(_policy_net(env, num_rescuers, device), SplitLayer()),
+    policy_module = TensorDictModule(
+        module=nn.Sequential(policy_net, SplitLayer()),
         in_keys=[("agents", "observation")],
         out_keys=[("agents", "loc"), ("agents", "scale")],
     )
 
-
-def make_policy(
-    env, num_rescuers: int, device: Union[torch.device, str] = "cpu"
-) -> ProbabilisticActor:
     return ProbabilisticActor(
-        module=_policy_module(env, num_rescuers, device),
+        module=policy_module,
         spec=env.action_spec,
         in_keys=[("agents", "loc"), ("agents", "scale")],
         out_keys=[env.action_key],
@@ -56,8 +48,9 @@ def make_policy(
     )
 
 
-def _critic_net(env, num_rescuers: int, device: Union[torch.device, str] = "cpu"):
-    return MultiAgentMLP(
+def make_critic(env, num_rescuers: int, device: Union[torch.device, str] = "cpu"):
+
+    critic_net = MultiAgentMLP(
         n_agent_inputs=env.observation_spec["agents", "observation"].shape[-1],
         n_agent_outputs=1,
         n_agents=num_rescuers,
@@ -69,9 +62,8 @@ def _critic_net(env, num_rescuers: int, device: Union[torch.device, str] = "cpu"
         activation_class=torch.nn.Tanh,
     )
 
-
-def make_critic(env, num_rescuers: int, device: Union[torch.device, str] = "cpu"):
     return ValueOperator(
-        module=_critic_net(env, num_rescuers, device),
+        module=critic_net,
         in_keys=[("agents", "observation")],
+        out_keys=[("agents", "state_value")],
     )

@@ -1,25 +1,27 @@
 env:
-  victims: 4
+  victims: 12
   rescuers: 6
   trees: 8
   safe_zones: 4
   max_cycles: 300
   continuous_actions: false
-  vision_radius: 0.2
+  vision_radius: 0.4
 train:
   active: false
-  algorithm: "mappo" # "ppo" or "mappo" (CTDE)
-  total_timesteps: 10000
-  eval_freq: 1000
+  total_timesteps: 102400
+  eval_freq: 500
   batch_size: 2048
-  n_epochs: 40
+  n_epochs: 20
   seed: 0
   render_mode: null
-  learning_rate: 0.0003
+  learning_rate: 0.001
 eval:
   active: false
   games: 10
   render_mode: "human"
+  plot:
+    live: true
+    fps: 30
 save_folder: "search_rescue_logs/"
 tensorboard:
   active: false

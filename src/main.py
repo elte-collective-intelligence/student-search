@@ -66,6 +66,7 @@ def main(cfg: DictConfig):
             num_games=cfg.eval.games,
             render_mode=cfg.eval.render_mode,
             save_folder=cfg.save_folder,
+            plot_cfg=cfg.eval.get("plot", {}),
             **env_kwargs,
         )
 
