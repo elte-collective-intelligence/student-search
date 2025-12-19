@@ -14,15 +14,21 @@ from queue import Queue, Empty
 def find_latest_model(save_folder: str, env_name: str) -> str:
     """
     Finds the latest .pt file in the save_folder based on modification time.
+    Searches recursively in dated subdirectories (e.g., save_folder/20251220-000020/*.pt)
     """
-    # Check for flat files (based on user prompt naming convention)
-    # Pattern: save_folder/search_rescue_v2_YYYYMMDD-HHMMSS.pt
-    search_pattern = os.path.join(save_folder, "*.pt")
+    # First try recursive search in dated subdirectories
+    search_pattern = os.path.join(save_folder, "**", "*.pt")
+    files = glob.glob(search_pattern, recursive=True)
 
-    files = glob.glob(search_pattern)
+    # Fallback to flat files in save_folder
+    if not files:
+        search_pattern = os.path.join(save_folder, "*.pt")
+        files = glob.glob(search_pattern)
 
     if not files:
-        raise FileNotFoundError(f"No model files (*.pt) found in {save_folder}")
+        raise FileNotFoundError(
+            f"No model files (*.pt) found in {save_folder} or its subdirectories"
+        )
 
     # Sort by modification time (newest first)
     latest_file = max(files, key=os.path.getmtime)
