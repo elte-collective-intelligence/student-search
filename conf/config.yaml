@@ -26,3 +26,4 @@ save_folder: "search_rescue_logs/"
 tensorboard:
   active: false
   port: 6006
+  enabled: true  # Enable TensorBoard logging during train/eval

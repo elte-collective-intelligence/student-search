@@ -2,6 +2,7 @@ from time import sleep, perf_counter
 
 from src.sar_env import make_env
 from src.models import make_policy
+from src.logger import RunContext, TensorboardLogger
 import glob
 import os
 import torch
@@ -173,10 +174,17 @@ def evaluate(
     save_folder: str = "search_rescue_logs",
     num_games: int = 3,
     plot_cfg: dict | None = None,
+    enable_logging: bool = True,
     **env_kwargs,
 ):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")
+
+    # Setup logging
+    run_ctx = RunContext(base_dir=save_folder, run_name="eval", create_subdirs=True)
+    logger = TensorboardLogger.create(ctx=run_ctx, enabled=enable_logging)
+    if enable_logging:
+        print(f"TensorBoard logging enabled. Log directory: {run_ctx.tb_run_dir}")
 
     # 1. Create Environment (Human Render Mode)
     # We need to create the env first to get the metadata name for auto-discovery
@@ -230,10 +238,15 @@ def evaluate(
 
     plotter = LivePlotter(fps=plot_fps) if live else None
 
+    # Track evaluation metrics
+    episode_rewards = []
+    episode_steps = []
+
     for i in range(num_games):
         td = env.reset()
         done = False
         step_count = 0
+        episode_reward = 0.0
 
         print(f"--- Episode {i + 1} ---")
 
@@ -270,9 +283,10 @@ def evaluate(
 
             step_count += 1
 
-            # Plot the rewards of each agent at each step (no console printing)
+            # Collect rewards for logging
             if ("agents", "reward") in td.keys(include_nested=True):
                 rewards = td["agents", "reward"].detach().cpu().numpy()
+                episode_reward += float(rewards.sum())
 
                 # Send data to plotter thread (non-blocking)
                 if plotter:
@@ -280,12 +294,38 @@ def evaluate(
 
             sleep(0.1)
 
-        print(f"Episode {i + 1} finished in {step_count} steps.")
+        # Log episode metrics
+        episode_rewards.append(episode_reward)
+        episode_steps.append(step_count)
+
+        logger.log_scalar("eval/episode_reward", episode_reward, step=i + 1)
+        logger.log_scalar("eval/episode_steps", step_count, step=i + 1)
+        logger.log_scalar(
+            "eval/mean_reward_per_step", episode_reward / max(step_count, 1), step=i + 1
+        )
+
+        print(
+            f"Episode {i + 1} finished in {step_count} steps. Total reward: {episode_reward:.2f}"
+        )
         # Brief spacing; plotter thread continues rendering
         if plotter:
             sleep(0.2)
 
+    # Log summary statistics
+    if episode_rewards:
+        mean_reward = sum(episode_rewards) / len(episode_rewards)
+        mean_steps = sum(episode_steps) / len(episode_steps)
+        logger.log_scalar("eval/mean_episode_reward", mean_reward, step=num_games)
+        logger.log_scalar("eval/mean_episode_steps", mean_steps, step=num_games)
+        logger.log_scalar("eval/total_episodes", num_games, step=num_games)
+
+    logger.close()
     print("Evaluation finished.")
+    if episode_rewards:
+        print(f"Mean episode reward: {mean_reward:.2f}")
+        print(f"Mean episode steps: {mean_steps:.1f}")
+    if enable_logging:
+        print(f"TensorBoard logs available at: {run_ctx.tb_run_dir}")
     env.close()
     if plotter:
         plotter.stop()

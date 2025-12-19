@@ -42,31 +42,47 @@ def main(cfg: DictConfig):
         cfg.train.active ^ cfg.eval.active
     ), "Please specify one of train.active=true or eval.active=true in the arguments."
 
-    env_kwargs = {
-        "num_victims": cfg.env.victims,
-        "num_rescuers": cfg.env.rescuers,
-        "num_trees": cfg.env.trees,
-        "num_safe_zones": cfg.env.safe_zones,
-        "max_cycles": cfg.env.max_cycles,
-        "continuous_actions": cfg.env.continuous_actions,
-        "vision_radius": cfg.env.vision_radius,
-    }
+    # Determine if logging is enabled (default to True if tensorboard config exists)
+    enable_logging = cfg.get("tensorboard", {}).get("enabled", True)
+    if "tensorboard" in cfg and "enabled" not in cfg.tensorboard:
+        # If tensorboard config exists but enabled is not set, default to True
+        enable_logging = True
 
     if cfg.train.active:
+        env_kwargs = {
+            "num_victims": cfg.env.victims,
+            "num_rescuers": cfg.env.rescuers,
+            "num_trees": cfg.env.trees,
+            "num_safe_zones": cfg.env.safe_zones,
+            "max_cycles": cfg.env.max_cycles,
+            "continuous_actions": cfg.env.continuous_actions,
+            "vision_radius": cfg.env.vision_radius,
+            "render_mode": cfg.train.render_mode,
+        }
         train(
             steps=cfg.train.total_timesteps,
             batch_size=cfg.train.batch_size,
             seed=cfg.train.seed,
-            render_mode=cfg.train.render_mode,
             save_folder=cfg.save_folder,
+            enable_logging=enable_logging,
             **env_kwargs,
         )
     elif cfg.eval.active:
+        env_kwargs = {
+            "num_victims": cfg.env.victims,
+            "num_rescuers": cfg.env.rescuers,
+            "num_trees": cfg.env.trees,
+            "num_safe_zones": cfg.env.safe_zones,
+            "max_cycles": cfg.env.max_cycles,
+            "continuous_actions": cfg.env.continuous_actions,
+            "vision_radius": cfg.env.vision_radius,
+            "render_mode": cfg.eval.render_mode,
+        }
         evaluate(
             num_games=cfg.eval.games,
-            render_mode=cfg.eval.render_mode,
             save_folder=cfg.save_folder,
             plot_cfg=cfg.eval.get("plot", {}),
+            enable_logging=enable_logging,
             **env_kwargs,
         )
 

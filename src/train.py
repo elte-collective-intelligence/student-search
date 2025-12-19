@@ -1,4 +1,3 @@
-import os
 import time
 
 import torch
@@ -10,6 +9,7 @@ import tqdm
 
 from src.models import make_policy, make_critic
 from src.sar_env import make_env
+from src.logger import RunContext, TensorboardLogger
 
 
 def train(
@@ -20,11 +20,18 @@ def train(
     frames_per_batch: int = 2048,
     seed: int = 0,
     save_folder: str = "search_rescue_logs/",
+    enable_logging: bool = True,
     **env_kwargs,
 ):
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")
+
+    # Setup logging
+    run_ctx = RunContext(base_dir=save_folder, run_name=None, create_subdirs=True)
+    logger = TensorboardLogger.create(ctx=run_ctx, enabled=enable_logging)
+    if enable_logging:
+        print(f"TensorBoard logging enabled. Log directory: {run_ctx.tb_run_dir}")
 
     # Create environment
     env_kwargs["seed"] = seed
@@ -85,6 +92,23 @@ def train(
 
     pbar = tqdm.tqdm(total=steps, unit="frames")
     rewards_log = []
+    iteration = 0
+    total_frames = 0
+
+    # Log hyperparameters
+    logger.log_dict(
+        "hyperparameters",
+        {
+            "learning_rate": learning_rate,
+            "num_epochs": num_epochs,
+            "frames_per_batch": frames_per_batch,
+            "batch_size": batch_size,
+            "total_steps": steps,
+            "seed": seed,
+            "num_agents": num_agents,
+        },
+        step=0,
+    )
 
     for batch in collector:
         # 1. Prepare Batch
@@ -107,6 +131,12 @@ def train(
         minibatch_size = 128
 
         # 2. PPO Update
+        avg_loss_objective = 0.0
+        avg_loss_critic = 0.0
+        avg_loss_entropy = 0.0
+        avg_loss_total = 0.0
+        num_updates = 0
+
         for _ in range(num_epochs):
             for _ in range(frames_per_batch // minibatch_size):
                 subdata = replay_buffer.sample(minibatch_size)
@@ -123,8 +153,30 @@ def train(
                 torch.nn.utils.clip_grad_norm_(loss_module.parameters(), 1.0)
                 optimizer.step()
 
+                # Accumulate losses for logging
+                avg_loss_objective += loss_vals["loss_objective"].item()
+                avg_loss_critic += loss_vals["loss_critic"].item()
+                avg_loss_entropy += loss_vals["loss_entropy"].item()
+                avg_loss_total += loss_value.item()
+                num_updates += 1
+
         # 3. Logging
         pbar.update(batch.numel())
+        total_frames += batch.numel()
+        iteration += 1
+
+        # Log training losses
+        if num_updates > 0:
+            logger.log_dict(
+                "train/loss",
+                {
+                    "objective": avg_loss_objective / num_updates,
+                    "critic": avg_loss_critic / num_updates,
+                    "entropy": avg_loss_entropy / num_updates,
+                    "total": avg_loss_total / num_updates,
+                },
+                step=iteration,
+            )
 
         # Check for completed episodes in the batch to log reward
         # Note: Using next/done to filter
@@ -136,25 +188,43 @@ def train(
             rewards_log.append(mean_reward)
             pbar.set_description(f"Mean Reward: {mean_reward:.2f}")
 
+            # Log episode metrics
+            logger.log_scalar("train/episode_reward", mean_reward, step=iteration)
+            logger.log_scalar("train/total_frames", total_frames, step=iteration)
+
         collector.update_policy_weights_()
 
     pbar.close()
 
-    os.makedirs(save_folder, exist_ok=True)
-
-    # Save model
-    model_path = f"{save_folder}/{env.base_env.metadata['name']}_{time.strftime('%Y%m%d-%H%M%S')}.pt"
+    # Save model in the run directory
+    model_path = (
+        run_ctx.run_dir
+        / f"{env.base_env.metadata['name']}_{time.strftime('%Y%m%d-%H%M%S')}.pt"
+    )
+    model_path.parent.mkdir(parents=True, exist_ok=True)
 
     torch.save(
         {
             "policy_state_dict": policy.state_dict(),
             "critic_state_dict": critic.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
+            "total_frames": total_frames,
+            "iteration": iteration,
         },
-        model_path,
+        str(model_path),
     )
 
+    # Log final summary
+    if rewards_log:
+        final_mean_reward = sum(rewards_log) / len(rewards_log)
+        logger.log_scalar("train/final_mean_reward", final_mean_reward, step=iteration)
+        logger.log_scalar("train/total_episodes", len(rewards_log), step=iteration)
+
+    logger.close()
     collector.shutdown()
     env.close()
 
     print(f"Finished MARL training on {env.base_env.metadata['name']}.")
+    print(f"Model saved to: {model_path}")
+    if enable_logging:
+        print(f"TensorBoard logs available at: {run_ctx.tb_run_dir}")
