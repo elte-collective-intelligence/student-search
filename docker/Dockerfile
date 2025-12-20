@@ -7,6 +7,6 @@ RUN pip install --no-cache-dir -r requirements.txt --break-system-packages
 
 COPY . /app
 
-ENTRYPOINT ["python", "src/main.py"]
+ENTRYPOINT ["python", "-m", "src.main"]
 
 CMD ["train.active=true"]
