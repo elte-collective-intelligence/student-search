@@ -1,7 +1,7 @@
 import numpy as np
 
 
-def _get_obs_slice_indices(env, agent_idx):
+def _get_obs_slice_indices(env):
     """Calculate slice indices for different observation components.
 
     Observation structure:
@@ -19,12 +19,12 @@ def _get_obs_slice_indices(env, agent_idx):
     victims_end = trees_end + env.num_victims * 3
 
     return {
-        'self_vel': slice(0, 2),
-        'self_pos': slice(2, 4),
-        'agent_id': slice(4, agent_id_end),
-        'safe_zones': slice(agent_id_end, safe_zones_end),
-        'trees': slice(safe_zones_end, trees_end),
-        'victims': slice(trees_end, victims_end),
+        "self_vel": slice(0, 2),
+        "self_pos": slice(2, 4),
+        "agent_id": slice(4, agent_id_end),
+        "safe_zones": slice(agent_id_end, safe_zones_end),
+        "trees": slice(safe_zones_end, trees_end),
+        "victims": slice(trees_end, victims_end),
     }
 
 
@@ -52,36 +52,37 @@ def test_occlusion_blocks_tree_in_observation(make_env):
 
     obs = env._get_obs()
     obs_vec = obs[agent]
-    slices = _get_obs_slice_indices(env, agent_idx)
+    slices = _get_obs_slice_indices(env)
 
     # Check that tree is visible (within vision radius and no occlusion)
-    tree_slice = slices['trees']
-    tree_rel_pos = obs_vec[tree_slice.start:tree_slice.start + 2]
+    tree_slice = slices["trees"]
+    tree_rel_pos = obs_vec[tree_slice.start : tree_slice.start + 2]
     expected_tree_rel = env.tree_pos[0] - env.rescuer_pos[agent_idx]
-    assert np.allclose(tree_rel_pos, expected_tree_rel, atol=1e-5), \
-        f"Tree should be visible. Got {tree_rel_pos}, expected {expected_tree_rel}"
+    assert np.allclose(
+        tree_rel_pos, expected_tree_rel, atol=1e-5
+    ), f"Tree should be visible. Got {tree_rel_pos}, expected {expected_tree_rel}"
 
     # Check that victim is blocked (masked as [0.0, 0.0, -1.0])
-    victim_slice = slices['victims']
-    victim_obs = obs_vec[victim_slice.start:victim_slice.start + 3]
-    assert np.allclose(victim_obs, [0.0, 0.0, -1.0], atol=1e-5), \
-        f"Victim should be blocked. Got {victim_obs}, expected [0.0, 0.0, -1.0]"
+    victim_slice = slices["victims"]
+    victim_obs = obs_vec[victim_slice.start : victim_slice.start + 3]
+    assert np.allclose(
+        victim_obs, [0.0, 0.0, -1.0], atol=1e-5
+    ), f"Victim should be blocked. Got {victim_obs}, expected [0.0, 0.0, -1.0]"
 
     # Verify occlusion check
     assert not env._is_visible(
-        env.rescuer_pos[agent_idx],
-        env.victim_pos[0],
-        env.agent_size
+        env.rescuer_pos[agent_idx], env.victim_pos[0], env.agent_size
     ), "Victim should be blocked by tree"
 
     # Move tree away: victim should be visible now
     env.tree_pos[0] = np.array([0.0, 0.8])
     obs = env._get_obs()
     obs_vec = obs[agent]
-    victim_obs = obs_vec[victim_slice.start:victim_slice.start + 3]
+    victim_obs = obs_vec[victim_slice.start : victim_slice.start + 3]
     expected_victim_rel = env.victim_pos[0] - env.rescuer_pos[agent_idx]
-    assert np.allclose(victim_obs[:2], expected_victim_rel[:2], atol=1e-5), \
-        f"Victim should be visible now. Got {victim_obs[:2]}, expected {expected_victim_rel[:2]}"
+    assert np.allclose(
+        victim_obs[:2], expected_victim_rel[:2], atol=1e-5
+    ), f"Victim should be visible now. Got {victim_obs[:2]}, expected {expected_victim_rel[:2]}"
     assert victim_obs[2] == 0.0, f"Victim type should be 0, got {victim_obs[2]}"
 
 
@@ -107,22 +108,24 @@ def test_vision_radius_masks_distant_entities(make_env):
 
     obs = env._get_obs()
     obs_vec = obs[agent]
-    slices = _get_obs_slice_indices(env, agent_idx)
+    slices = _get_obs_slice_indices(env)
 
     # Check victim is visible
-    victim_slice = slices['victims']
-    victim_obs = obs_vec[victim_slice.start:victim_slice.start + 3]
+    victim_slice = slices["victims"]
+    victim_obs = obs_vec[victim_slice.start : victim_slice.start + 3]
     expected_victim_rel = env.victim_pos[0] - env.rescuer_pos[agent_idx]
-    assert np.allclose(victim_obs[:2], expected_victim_rel[:2], atol=1e-5), \
-        f"Victim should be visible. Got {victim_obs[:2]}, expected {expected_victim_rel[:2]}"
+    assert np.allclose(
+        victim_obs[:2], expected_victim_rel[:2], atol=1e-5
+    ), f"Victim should be visible. Got {victim_obs[:2]}, expected {expected_victim_rel[:2]}"
     assert victim_obs[2] != -1.0, "Victim should not be masked"
 
     # Check tree is visible
-    tree_slice = slices['trees']
-    tree_obs = obs_vec[tree_slice.start:tree_slice.start + 2]
+    tree_slice = slices["trees"]
+    tree_obs = obs_vec[tree_slice.start : tree_slice.start + 2]
     expected_tree_rel = env.tree_pos[0] - env.rescuer_pos[agent_idx]
-    assert np.allclose(tree_obs, expected_tree_rel, atol=1e-5), \
-        f"Tree should be visible. Got {tree_obs}, expected {expected_tree_rel}"
+    assert np.allclose(
+        tree_obs, expected_tree_rel, atol=1e-5
+    ), f"Tree should be visible. Got {tree_obs}, expected {expected_tree_rel}"
 
     # Move victim and tree beyond vision radius (> 0.5)
     env.victim_pos[0] = np.array([0.7, 0.0])
@@ -132,14 +135,16 @@ def test_vision_radius_masks_distant_entities(make_env):
     obs_vec = obs[agent]
 
     # Check victim is masked
-    victim_obs = obs_vec[victim_slice.start:victim_slice.start + 3]
-    assert np.allclose(victim_obs, [0.0, 0.0, -1.0], atol=1e-5), \
-        f"Victim should be masked (too far). Got {victim_obs}, expected [0.0, 0.0, -1.0]"
+    victim_obs = obs_vec[victim_slice.start : victim_slice.start + 3]
+    assert np.allclose(
+        victim_obs, [0.0, 0.0, -1.0], atol=1e-5
+    ), f"Victim should be masked (too far). Got {victim_obs}, expected [0.0, 0.0, -1.0]"
 
     # Check tree is masked
-    tree_obs = obs_vec[tree_slice.start:tree_slice.start + 2]
-    assert np.allclose(tree_obs, [0.0, 0.0], atol=1e-5), \
-        f"Tree should be masked (too far). Got {tree_obs}, expected [0.0, 0.0]"
+    tree_obs = obs_vec[tree_slice.start : tree_slice.start + 2]
+    assert np.allclose(
+        tree_obs, [0.0, 0.0], atol=1e-5
+    ), f"Tree should be masked (too far). Got {tree_obs}, expected [0.0, 0.0]"
 
 
 def test_occlusion_no_block_when_tree_outside_segment(make_env):
@@ -154,7 +159,6 @@ def test_occlusion_no_block_when_tree_outside_segment(make_env):
     )
 
     obs, _ = env.reset()
-    agent = env.agents[0]
     agent_idx = 0
 
     env.rescuer_pos[agent_idx] = np.array([-0.5, 0.0])
@@ -163,25 +167,19 @@ def test_occlusion_no_block_when_tree_outside_segment(make_env):
     # Tree behind observer (should NOT block)
     env.tree_pos[0] = np.array([-0.8, 0.0])
     assert env._is_visible(
-        env.rescuer_pos[agent_idx],
-        env.victim_pos[0],
-        env.agent_size
+        env.rescuer_pos[agent_idx], env.victim_pos[0], env.agent_size
     ), "Tree behind observer should not block vision"
 
     # Tree behind target (should NOT block)
     env.tree_pos[0] = np.array([0.8, 0.0])
     assert env._is_visible(
-        env.rescuer_pos[agent_idx],
-        env.victim_pos[0],
-        env.agent_size
+        env.rescuer_pos[agent_idx], env.victim_pos[0], env.agent_size
     ), "Tree behind target should not block vision"
 
     # Tree between (should block)
     env.tree_pos[0] = np.array([0.0, 0.0])
     assert not env._is_visible(
-        env.rescuer_pos[agent_idx],
-        env.victim_pos[0],
-        env.agent_size
+        env.rescuer_pos[agent_idx], env.victim_pos[0], env.agent_size
     ), "Tree between observer and target should block vision"
 
 
@@ -207,11 +205,11 @@ def test_saved_victims_are_masked(make_env):
 
     obs = env._get_obs()
     obs_vec = obs[agent]
-    slices = _get_obs_slice_indices(env, agent_idx)
+    slices = _get_obs_slice_indices(env)
 
     # Victim should be visible when not saved
-    victim_slice = slices['victims']
-    victim_obs = obs_vec[victim_slice.start:victim_slice.start + 3]
+    victim_slice = slices["victims"]
+    victim_obs = obs_vec[victim_slice.start : victim_slice.start + 3]
     assert victim_obs[2] != -1.0, "Unsaved victim should be visible"
 
     # Mark victim as saved
@@ -219,11 +217,12 @@ def test_saved_victims_are_masked(make_env):
 
     obs = env._get_obs()
     obs_vec = obs[agent]
-    victim_obs = obs_vec[victim_slice.start:victim_slice.start + 3]
+    victim_obs = obs_vec[victim_slice.start : victim_slice.start + 3]
 
     # Saved victim should be masked regardless of distance
-    assert np.allclose(victim_obs, [0.0, 0.0, -1.0], atol=1e-5), \
-        f"Saved victim should be masked. Got {victim_obs}, expected [0.0, 0.0, -1.0]"
+    assert np.allclose(
+        victim_obs, [0.0, 0.0, -1.0], atol=1e-5
+    ), f"Saved victim should be masked. Got {victim_obs}, expected [0.0, 0.0, -1.0]"
 
 
 def test_observation_structure_correctness(make_env):
@@ -249,8 +248,9 @@ def test_observation_structure_correctness(make_env):
 
     for agent in env.agents:
         obs_vec = obs[agent]
-        assert obs_vec.shape == (expected_obs_dim,), \
-            f"Observation shape mismatch. Got {obs_vec.shape}, expected ({expected_obs_dim},)"
+        assert obs_vec.shape == (
+            expected_obs_dim,
+        ), f"Observation shape mismatch. Got {obs_vec.shape}, expected ({expected_obs_dim},)"
 
         # Check that self position and velocity are present
         assert obs_vec[0:2].shape == (2,), "Self velocity should be 2D"
@@ -260,15 +260,18 @@ def test_observation_structure_correctness(make_env):
         agent_idx = env.agents.index(agent)
         agent_id_slice = slice(4, 4 + env.num_rescuers)
         agent_id = obs_vec[agent_id_slice]
-        assert agent_id[agent_idx] == 1.0, f"Agent {agent_idx} ID should be 1.0 at index {agent_idx}"
+        assert (
+            agent_id[agent_idx] == 1.0
+        ), f"Agent {agent_idx} ID should be 1.0 at index {agent_idx}"
         assert np.sum(agent_id) == 1.0, "Agent ID should be one-hot (sum to 1.0)"
 
         # Check safe zones structure (should always be present, not masked)
         safe_zones_start = 4 + env.num_rescuers
         safe_zones_end = safe_zones_start + env.num_safe_zones * 3
         safe_zones = obs_vec[safe_zones_start:safe_zones_end]
-        assert safe_zones.shape == (env.num_safe_zones * 3,), \
-            f"Safe zones should have shape ({env.num_safe_zones * 3},), got {safe_zones.shape}"
+        assert safe_zones.shape == (
+            env.num_safe_zones * 3,
+        ), f"Safe zones should have shape ({env.num_safe_zones * 3},), got {safe_zones.shape}"
 
 
 def test_multiple_trees_occlusion(make_env):
@@ -283,7 +286,6 @@ def test_multiple_trees_occlusion(make_env):
     )
 
     obs, _ = env.reset()
-    agent = env.agents[0]
     agent_idx = 0
 
     env.rescuer_pos[agent_idx] = np.array([-0.5, 0.0])
@@ -295,17 +297,13 @@ def test_multiple_trees_occlusion(make_env):
     env.tree_pos[1] = np.array([0.0, 0.5])
 
     assert not env._is_visible(
-        env.rescuer_pos[agent_idx],
-        env.victim_pos[0],
-        env.agent_size
+        env.rescuer_pos[agent_idx], env.victim_pos[0], env.agent_size
     ), "First tree should block vision"
 
     # Move first tree away, second tree should not block (it's off the line)
     env.tree_pos[0] = np.array([0.0, 0.5])
     assert env._is_visible(
-        env.rescuer_pos[agent_idx],
-        env.victim_pos[0],
-        env.agent_size
+        env.rescuer_pos[agent_idx], env.victim_pos[0], env.agent_size
     ), "No tree should block vision now"
 
 
@@ -321,7 +319,6 @@ def test_vision_radius_edge_case(make_env):
     )
 
     obs, _ = env.reset()
-    agent = env.agents[0]
     agent_idx = 0
 
     env.rescuer_pos[agent_idx] = np.array([0.0, 0.0])
@@ -333,17 +330,13 @@ def test_vision_radius_edge_case(make_env):
 
     # According to _is_visible, dist > vision_radius returns False, so == should return True
     assert env._is_visible(
-        env.rescuer_pos[agent_idx],
-        env.victim_pos[0],
-        env.agent_size
+        env.rescuer_pos[agent_idx], env.victim_pos[0], env.agent_size
     ), "Entity at exactly vision radius should be visible"
 
     # Victim just beyond vision radius (should be masked)
     env.victim_pos[0] = np.array([0.5001, 0.0])
     assert not env._is_visible(
-        env.rescuer_pos[agent_idx],
-        env.victim_pos[0],
-        env.agent_size
+        env.rescuer_pos[agent_idx], env.victim_pos[0], env.agent_size
     ), "Entity just beyond vision radius should not be visible"
 
 
@@ -369,11 +362,11 @@ def test_safe_zones_always_visible(make_env):
 
     obs = env._get_obs()
     obs_vec = obs[agent]
-    slices = _get_obs_slice_indices(env, agent_idx)
+    slices = _get_obs_slice_indices(env)
 
     # Safe zones should always be present in observation (not masked)
-    safe_zones_slice = slices['safe_zones']
-    safe_zones = obs_vec[safe_zones_slice.start:safe_zones_slice.stop]
+    safe_zones_slice = slices["safe_zones"]
+    safe_zones = obs_vec[safe_zones_slice.start : safe_zones_slice.stop]
 
     # All safe zones should have valid relative positions (not all zeros)
     # They should be relative to agent position
@@ -385,10 +378,12 @@ def test_safe_zones_always_visible(make_env):
 
         # Relative position should match safe zone position - agent position
         expected_rel = env.safezone_pos[i] - env.rescuer_pos[agent_idx]
-        assert np.allclose([rel_x, rel_y], expected_rel, atol=1e-5), \
-            f"Safe zone {i} relative position incorrect. Got [{rel_x}, {rel_y}], expected {expected_rel}"
-        assert zone_type == float(env.safe_zone_types[i]), \
-            f"Safe zone {i} type incorrect. Got {zone_type}, expected {env.safe_zone_types[i]}"
+        assert np.allclose(
+            [rel_x, rel_y], expected_rel, atol=1e-5
+        ), f"Safe zone {i} relative position incorrect. Got [{rel_x}, {rel_y}], expected {expected_rel}"
+        assert zone_type == float(
+            env.safe_zone_types[i]
+        ), f"Safe zone {i} type incorrect. Got {zone_type}, expected {env.safe_zone_types[i]}"
 
 
 # def test_tree_occludes_other_trees(make_env):
@@ -468,38 +463,42 @@ def test_relative_position_calculation(make_env):
 
     obs = env._get_obs()
     obs_vec = obs[agent]
-    slices = _get_obs_slice_indices(env, agent_idx)
+    slices = _get_obs_slice_indices(env)
 
     # Check self position (should be absolute, not relative)
-    self_pos = obs_vec[slices['self_pos']]
-    assert np.allclose(self_pos, env.rescuer_pos[agent_idx], atol=1e-5), \
-        f"Self position should be absolute. Got {self_pos}, expected {env.rescuer_pos[agent_idx]}"
+    self_pos = obs_vec[slices["self_pos"]]
+    assert np.allclose(
+        self_pos, env.rescuer_pos[agent_idx], atol=1e-5
+    ), f"Self position should be absolute. Got {self_pos}, expected {env.rescuer_pos[agent_idx]}"
 
     # Check victim relative positions
-    victim_slice = slices['victims']
+    victim_slice = slices["victims"]
     if env._is_visible(env.rescuer_pos[agent_idx], env.victim_pos[0], env.agent_size):
-        victim0_obs = obs_vec[victim_slice.start:victim_slice.start + 3]
+        victim0_obs = obs_vec[victim_slice.start : victim_slice.start + 3]
         expected_rel = env.victim_pos[0] - env.rescuer_pos[agent_idx]
-        assert np.allclose(victim0_obs[:2], expected_rel, atol=1e-5), \
-            f"Victim 0 relative position incorrect. Got {victim0_obs[:2]}, expected {expected_rel}"
+        assert np.allclose(
+            victim0_obs[:2], expected_rel, atol=1e-5
+        ), f"Victim 0 relative position incorrect. Got {victim0_obs[:2]}, expected {expected_rel}"
 
     # Check tree relative positions
-    tree_slice = slices['trees']
+    tree_slice = slices["trees"]
     if env._is_visible(env.rescuer_pos[agent_idx], env.tree_pos[0], env.tree_radius):
-        tree0_obs = obs_vec[tree_slice.start:tree_slice.start + 2]
+        tree0_obs = obs_vec[tree_slice.start : tree_slice.start + 2]
         expected_rel = env.tree_pos[0] - env.rescuer_pos[agent_idx]
-        assert np.allclose(tree0_obs, expected_rel, atol=1e-5), \
-            f"Tree 0 relative position incorrect. Got {tree0_obs}, expected {expected_rel}"
+        assert np.allclose(
+            tree0_obs, expected_rel, atol=1e-5
+        ), f"Tree 0 relative position incorrect. Got {tree0_obs}, expected {expected_rel}"
 
     # Check safe zone relative positions
-    safe_zones_slice = slices['safe_zones']
+    safe_zones_slice = slices["safe_zones"]
     for i in range(env.num_safe_zones):
         idx = safe_zones_slice.start + i * 3
         rel_x = obs_vec[idx]
         rel_y = obs_vec[idx + 1]
         expected_rel = env.safezone_pos[i] - env.rescuer_pos[agent_idx]
-        assert np.allclose([rel_x, rel_y], expected_rel, atol=1e-5), \
-            f"Safe zone {i} relative position incorrect. Got [{rel_x}, {rel_y}], expected {expected_rel}"
+        assert np.allclose(
+            [rel_x, rel_y], expected_rel, atol=1e-5
+        ), f"Safe zone {i} relative position incorrect. Got [{rel_x}, {rel_y}], expected {expected_rel}"
 
 
 def test_occlusion_tangent_case(make_env):
@@ -514,7 +513,6 @@ def test_occlusion_tangent_case(make_env):
     )
 
     obs, _ = env.reset()
-    agent = env.agents[0]
     agent_idx = 0
 
     env.rescuer_pos[agent_idx] = np.array([-0.5, 0.0])
@@ -528,12 +526,12 @@ def test_occlusion_tangent_case(make_env):
     # Tangent case: tree should block if it intersects the segment [0, 1]
     # For this specific case, we need to check if the implementation handles it correctly
     is_visible = env._is_visible(
-        env.rescuer_pos[agent_idx],
-        env.victim_pos[0],
-        env.agent_size
+        env.rescuer_pos[agent_idx], env.victim_pos[0], env.agent_size
     )
 
     # The exact behavior depends on the math, but we should test it's consistent
     # If tangent and t1 or t2 is exactly 0 or 1, it should block
     # For now, just verify the function doesn't crash and returns a boolean
-    assert isinstance(is_visible, (bool, np.bool_)), "Visibility check should return boolean"
+    assert isinstance(
+        is_visible, (bool, np.bool_)
+    ), "Visibility check should return boolean"
