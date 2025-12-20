@@ -46,9 +46,6 @@ class SearchAndRescueEnv(ParallelEnv):
         self.possible_agents = self.agents[:]
         self.victim_names = [f"victim_{i}" for i in range(num_victims)]
 
-        # --- Type Mapping (A..D) ---
-        # Internally we use ints (0-3) for the Network, but strings for Humans
-        self.type_map = {0: "A", 1: "B", 2: "C", 3: "D"}
         # Assign types cyclically
         self.victim_types = [i % 4 for i in range(num_victims)]
         self.safe_zone_types = [0, 1, 2, 3]  # TL, TR, BL, BR
@@ -324,7 +321,6 @@ class SearchAndRescueEnv(ParallelEnv):
 
             type_idx = self.safe_zone_types[i]
             color = self.type_colors[type_idx]
-            label = self.type_map[type_idx]  # "A", "B", etc.
 
             s = pygame.Surface((r * 2, r * 2), pygame.SRCALPHA)
             s.fill((*color, 50))
@@ -332,10 +328,6 @@ class SearchAndRescueEnv(ParallelEnv):
             pygame.draw.rect(
                 self.screen, color, (s_pos[0] - r, s_pos[1] - r, r * 2, r * 2), 2
             )
-
-            # Draw Label
-            text = self.font.render(label, True, (255, 255, 255))
-            self.screen.blit(text, (s_pos[0] - 10, s_pos[1] - 10))
 
         # Draw Trees
         for pos in self.tree_pos:
@@ -414,7 +406,7 @@ class SearchAndRescueEnv(ParallelEnv):
                 delta = (
                     self.prev_agent_victim_dists[i] - current_dists[i]
                 )  # positive = got closer
-                rewards[agent] += delta * 0.5  # 5x magnitude increase (was 0.1)
+                rewards[agent] += delta * 0.1
         self.prev_agent_victim_dists = current_dists
 
         # Check safe zones
