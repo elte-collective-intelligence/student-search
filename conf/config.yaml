@@ -19,9 +19,6 @@ eval:
   active: false
   games: 10
   render_mode: "human"
-  plot:
-    live: true
-    fps: 30
 save_folder: "search_rescue_logs/"
 tensorboard:
   active: false

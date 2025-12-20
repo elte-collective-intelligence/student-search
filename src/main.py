@@ -81,7 +81,6 @@ def main(cfg: DictConfig):
         evaluate(
             num_games=cfg.eval.games,
             save_folder=cfg.save_folder,
-            plot_cfg=cfg.eval.get("plot", {}),
             enable_logging=enable_logging,
             **env_kwargs,
         )
