@@ -15,10 +15,16 @@ train: build
 	@mkdir -p $(LOG_DIR)
 	$(CONTAINER_TOOL) run --rm \
 		-v $(LOG_DIR):/app/search_rescue_logs \
-		$(IMAGE) $(TRAIN_ARGS) ++train.active=true
+		$(IMAGE) $(TRAIN_ARGS) ++train.active=true ++eval.active=false ++tensorboard.active=false ++save_folder=search_rescue_logs
 
 eval: build
 	@mkdir -p $(LOG_DIR)
 	$(CONTAINER_TOOL) run --rm -it \
 		-v $(LOG_DIR):/app/search_rescue_logs \
-		$(IMAGE) $(EVAL_ARGS) ++eval.active=true
+		$(IMAGE) $(EVAL_ARGS) ++train.active=false ++eval.active=true ++tensorboard.active=false ++save_folder=search_rescue_logs
+
+tensorboard: build
+	@mkdir -p $(LOG_DIR)
+	$(CONTAINER_TOOL) run --rm -it -p 6006:6006 \
+		-v $(LOG_DIR):/app/search_rescue_logs \
+		$(IMAGE) ++train.active=false ++eval.active=false ++tensorboard.active=true ++save_folder=search_rescue_logs

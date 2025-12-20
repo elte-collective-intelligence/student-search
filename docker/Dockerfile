@@ -7,6 +7,9 @@ RUN pip install --no-cache-dir -r requirements.txt --break-system-packages
 
 COPY . /app
 
+# TensorBoard default port
+EXPOSE 6006
+
 ENTRYPOINT ["python", "-m", "src.main"]
 
 CMD ["train.active=true"]
