@@ -143,10 +143,6 @@ class SearchAndRescueEnv(ParallelEnv):
 
             tree_c = self.tree_pos[t_idx]
 
-            if (tree_c == target_pos).all():
-                # Tree is most likely itself, and we don't want it to block
-                return True
-
             # Vector from observer to target
             d_vec = target_pos - observer_pos
             # Vector from observer to tree center
