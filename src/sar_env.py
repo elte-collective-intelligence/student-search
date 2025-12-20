@@ -130,6 +130,10 @@ class SearchAndRescueEnv(ParallelEnv):
         for t_idx in range(self.num_trees):
             tree_c = self.tree_pos[t_idx]
 
+            if (tree_c == target_pos).all():
+                # Tree is most likely itself, and we don't want it to block
+                return True
+
             # Vector from observer to target
             d_vec = target_pos - observer_pos
             # Vector from observer to tree center
@@ -220,7 +224,6 @@ class SearchAndRescueEnv(ParallelEnv):
             if speed > 0.08:
                 self.rescuer_vel[i] = (self.rescuer_vel[i] / speed) * 0.08
 
-            # prev_pos = self.rescuer_pos[i].copy()
             self.rescuer_pos[i] += self.rescuer_vel[i]
 
             # --- Wall collision handling (reflect and damp) ---
