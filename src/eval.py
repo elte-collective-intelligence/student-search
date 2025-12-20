@@ -135,6 +135,9 @@ def evaluate(
             # Collect rewards for logging
             if ("agents", "reward") in td.keys(include_nested=True):
                 rewards = td["agents", "reward"].detach().cpu().numpy()
+                logger.log_scalar(
+                    f"eval/episode_{i+1}", rewards.mean(), step=step_count
+                )
                 episode_reward += float(rewards.sum())
 
             sleep(0.1)
