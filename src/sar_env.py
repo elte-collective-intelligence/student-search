@@ -71,15 +71,14 @@ class SearchAndRescueEnv(ParallelEnv):
         # [Self_Vel(2), Self_Pos(2),
         #  SafeZones(4 * 3: rel_x, rel_y, type_idx),
         #  Trees(N * 2: rel_x, rel_y),
-        #  Victims(N * 3: rel_x, rel_y, type_idx),
-        #  Other_Rescuers((N-1) * 2: rel_x, rel_y)]
+        #  Victims(N * 3: rel_x, rel_y, type_idx)]
+        # Note: Other rescuers removed from observation to focus learning on task
 
         self.obs_dim = (
             4
             + (self.num_safe_zones * 3)
             + (self.num_trees * 2)
             + (self.num_victims * 3)
-            + ((self.num_rescuers - 1) * 2)
         )
 
         self.observation_spaces = {
@@ -114,6 +113,9 @@ class SearchAndRescueEnv(ParallelEnv):
         self.safezone_pos = np.array(
             [[-0.9, 0.9], [0.9, 0.9], [-0.9, -0.9], [0.9, -0.9]]
         )
+
+        # Track previous distances for delta-based shaping
+        self.prev_agent_victim_dists = self._compute_agent_victim_dists()
 
         return self._get_obs(), {a: {} for a in self.agents}
 
@@ -189,14 +191,7 @@ class SearchAndRescueEnv(ParallelEnv):
                         [0.0, 0.0, -1.0]
                     )  # Masked (Type -1 indicates not visible)
 
-            # 5. Other Rescuers
-            for j in range(self.num_rescuers):
-                if i == j:
-                    continue
-                if self._is_visible(my_pos, self.rescuer_pos[j], self.agent_size):
-                    obs_vec.extend(self.rescuer_pos[j] - my_pos)
-                else:
-                    obs_vec.extend([0.0, 0.0])
+            # Other rescuers removed from observation to focus learning on task
 
             observations[agent] = np.array(obs_vec, dtype=np.float32)
         return observations
@@ -241,7 +236,7 @@ class SearchAndRescueEnv(ParallelEnv):
                 min_dist = self.agent_size + self.tree_radius
                 if dist < min_dist:
                     # Tree collision penalty
-                    rewards[agent] -= 5
+                    rewards[agent] -= 1
                     # Compute penetration depth and normal
                     if dist > 1e-6:
                         n = to_tree / dist
@@ -393,18 +388,34 @@ class SearchAndRescueEnv(ParallelEnv):
         if self.screen:
             pygame.quit()
 
-    def _compute_rewards(self, rewards) -> int:
-        # Distance shaping
-        for i, agent in enumerate(self.agents):
-            unsaved_indices = [
-                k for k, saved in enumerate(self.victim_saved) if not saved
-            ]
+    def _compute_agent_victim_dists(self):
+        """Compute min distance from each agent to nearest unsaved victim."""
+        dists = []
+        unsaved_indices = [k for k, saved in enumerate(self.victim_saved) if not saved]
+        for i in range(self.num_rescuers):
             if unsaved_indices:
-                dists = [
+                min_dist = min(
                     np.linalg.norm(self.rescuer_pos[i] - self.victim_pos[k])
                     for k in unsaved_indices
-                ]
-                rewards[agent] -= min(dists) * 0.1
+                )
+            else:
+                min_dist = 0.0
+            dists.append(min_dist)
+        return dists
+
+    def _compute_rewards(self, rewards) -> int:
+        # Delta-based distance shaping (reward for getting closer, penalty for moving away)
+        current_dists = self._compute_agent_victim_dists()
+        for i, agent in enumerate(self.agents):
+            if (
+                hasattr(self, "prev_agent_victim_dists")
+                and self.prev_agent_victim_dists[i] > 0
+            ):
+                delta = (
+                    self.prev_agent_victim_dists[i] - current_dists[i]
+                )  # positive = got closer
+                rewards[agent] += delta * 0.5  # 5x magnitude increase (was 0.1)
+        self.prev_agent_victim_dists = current_dists
 
         # Check safe zones
         saved_count = 0
@@ -436,23 +447,21 @@ class SearchAndRescueEnv(ParallelEnv):
                 if closest_agent is not None:
                     rewards[closest_agent] += 100.0
 
-        # Additional shaping rewards
-        # Positive inverse distance from victim to matching safe zone (only for victims being followed)
-        total_inverse = 0.0
+        # Individual credit: reward agent for leading victim toward safe zone
         for v_i in range(self.num_victims):
             if not self.victim_saved[v_i]:
-                # Check if victim is close to any agent (being followed)
-                min_dist = min(
-                    np.linalg.norm(a_pos - self.victim_pos[v_i])
-                    for a_pos in self.rescuer_pos
-                )
-                if min_dist < self.follow_radius:
-                    dist_to_zone = np.linalg.norm(
-                        self.victim_pos[v_i] - self.safezone_pos[self.victim_types[v_i]]
+                # Find which agent (if any) is following this victim
+                for i, agent in enumerate(self.agents):
+                    dist_to_victim = np.linalg.norm(
+                        self.rescuer_pos[i] - self.victim_pos[v_i]
                     )
-                    total_inverse += 0.1 / (dist_to_zone + 1e-6)
-        for a in self.agents:
-            rewards[a] += total_inverse
+                    if dist_to_victim < self.follow_radius:
+                        dist_to_zone = np.linalg.norm(
+                            self.victim_pos[v_i]
+                            - self.safezone_pos[self.victim_types[v_i]]
+                        )
+                        # 5x magnitude: 0.5 instead of 0.1
+                        rewards[agent] += 0.5 / (dist_to_zone + 1e-6)
 
         # Boundary penalties
         for i, agent in enumerate(self.agents):
@@ -460,33 +469,44 @@ class SearchAndRescueEnv(ParallelEnv):
             if abs(pos[0]) > 0.8 or abs(pos[1]) > 0.8:
                 rewards[agent] -= 1
 
-        # Penalty for staying in one place (low velocity)
-        for i, agent in enumerate(self.agents):
-            speed = np.linalg.norm(self.rescuer_vel[i])
-            if speed < 0.02:
-                rewards[agent] -= 0.5
-
-        # Team regularization
+        # Agent collision penalty - penalize agents that are too close to each other
         num_agents = len(self.agents)
         if num_agents > 1:
-            total_dist = 0.0
-            count = 0
             for i in range(num_agents):
                 for j in range(i + 1, num_agents):
                     dist = np.linalg.norm(self.rescuer_pos[i] - self.rescuer_pos[j])
-                    total_dist += dist
-                    count += 1
-            avg_dist = total_dist / count if count > 0 else 0
-            # Penalty for excessive clustering
-            if avg_dist < 0.3:
-                penalty = -0.1 * (0.3 - avg_dist) / 0.3
+                    if dist < 0.15:  # Agents are overlapping/colliding
+                        # Strong penalty to both agents
+                        rewards[self.agents[i]] -= 1.0
+                        rewards[self.agents[j]] -= 1.0
+
+        # Victim assignment bonus - reward agents for targeting different victims
+        unsaved_indices = [k for k, saved in enumerate(self.victim_saved) if not saved]
+        if num_agents > 1 and len(unsaved_indices) > 1:
+            # Find which victim each agent is closest to
+            agent_targets = []
+            for i in range(num_agents):
+                min_dist = float("inf")
+                closest_victim = None
+                for v_i in unsaved_indices:
+                    dist = np.linalg.norm(self.rescuer_pos[i] - self.victim_pos[v_i])
+                    if dist < min_dist:
+                        min_dist = dist
+                        closest_victim = v_i
+                agent_targets.append(closest_victim)
+
+            # Count unique victims being targeted
+            unique_targets = len(set(agent_targets))
+            # Bonus scales with task division (max when all agents target different victims)
+            # 5x magnitude: 0.25 instead of 0.05
+            if unique_targets > 1:
+                division_bonus = (
+                    0.25
+                    * (unique_targets - 1)
+                    / (min(num_agents, len(unsaved_indices)) - 1)
+                )
                 for a in self.agents:
-                    rewards[a] += penalty
-            # Diversity/coverage bonus
-            if avg_dist > 0.5:
-                bonus = 0.01
-                for a in self.agents:
-                    rewards[a] += bonus
+                    rewards[a] += division_bonus
 
         return saved_count
 
