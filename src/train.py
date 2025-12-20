@@ -203,6 +203,17 @@ def train(
     )
     model_path.parent.mkdir(parents=True, exist_ok=True)
 
+    # Save environment configuration for evaluation
+    env_config = {
+        "num_victims": env.base_env.num_victims,
+        "num_rescuers": env.base_env.num_rescuers,
+        "num_trees": env.base_env.num_trees,
+        "num_safe_zones": env.base_env.num_safe_zones,
+        "max_cycles": env.base_env.max_steps,
+        "continuous_actions": env.base_env.is_continuous,
+        "vision_radius": env.base_env.vision_radius,
+    }
+
     torch.save(
         {
             "policy_state_dict": policy.state_dict(),
@@ -210,6 +221,7 @@ def train(
             "optimizer_state_dict": optimizer.state_dict(),
             "total_frames": total_frames,
             "iteration": iteration,
+            "env_config": env_config,
         },
         str(model_path),
     )

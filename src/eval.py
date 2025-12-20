@@ -50,27 +50,44 @@ def evaluate(
     if enable_logging:
         print(f"TensorBoard logging enabled. Log directory: {run_ctx.tb_run_dir}")
 
-    # 1. Create Environment (Human Render Mode)
-    # We need to create the env first to get the metadata name for auto-discovery
-    print("Initializing environment...")
-    env = make_env(device=device, **env_kwargs)
-
-    # 2. Resolve Model Path
+    # 1. Resolve Model Path first (we need to load config from checkpoint)
     if not model_path:
         print(f"No model path provided. Searching in '{save_folder}'...")
+        # Create temporary env to get metadata name
+        temp_env = make_env(device=device, **env_kwargs)
         try:
-            env_name = env.base_env.metadata["name"]
+            env_name = temp_env.base_env.metadata["name"]
             model_path = find_latest_model(save_folder, env_name)
         except Exception as e:
             print(f"Error finding model: {e}")
             return
+        finally:
+            temp_env.close()
 
-    # 3. Load Model
+    # 2. Load Model and Config
     print(f"Loading model from: {model_path}")
     checkpoint = torch.load(model_path, map_location=device, weights_only=False)
 
-    num_agents = env.action_spec["agents", "action"].shape[0]
+    # 3. Use environment config from checkpoint if available
+    if "env_config" in checkpoint:
+        print("Using environment configuration from checkpoint:")
+        saved_config = checkpoint["env_config"]
+        for key, value in saved_config.items():
+            print(f"  {key}: {value}")
 
+        # Override env_kwargs with saved config (but keep render_mode from args)
+        render_mode = env_kwargs.get("render_mode", "human")
+        env_kwargs = saved_config.copy()
+        env_kwargs["render_mode"] = render_mode
+    else:
+        print("Warning: No env_config in checkpoint, using provided arguments")
+
+    # 4. Create Environment with correct configuration
+    print("Initializing environment...")
+    env = make_env(device=device, **env_kwargs)
+
+    # 5. Create and Load Policy
+    num_agents = env.action_spec["agents", "action"].shape[0]
     policy = make_policy(env, num_rescuers=num_agents, device=device)
 
     # Handle different saving formats
@@ -78,8 +95,8 @@ def evaluate(
         # Format from the robust training script
         policy.load_state_dict(checkpoint["policy_state_dict"])
         print(
-            f"Loaded checkpoint from step {checkpoint.get('steps', 'N/A')} "
-            f"with reward {checkpoint.get('mean_reward', 'N/A')}"
+            f"Loaded checkpoint from iteration {checkpoint.get('iteration', 'N/A')} "
+            f"(total frames: {checkpoint.get('total_frames', 'N/A')})"
         )
     elif isinstance(checkpoint, dict) and "actor" in checkpoint:
         # Format from older simple script
@@ -90,7 +107,7 @@ def evaluate(
 
     policy.eval()  # Set to evaluation mode
 
-    # 4. Evaluation Loop
+    # 6. Evaluation Loop
     print(f"Starting evaluation for {num_games} episodes...")
 
     # Track evaluation metrics
