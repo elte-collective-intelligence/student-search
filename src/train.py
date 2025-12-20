@@ -1,186 +1,242 @@
-"""
-Training script using TorchRL with PPO.
-"""
-
 import time
+
 import torch
+from torchrl.envs import check_env_specs
 from torchrl.collectors import SyncDataCollector
-from torchrl.envs import TransformedEnv, Compose, DoubleToFloat, StepCounter
-from torchrl.envs.utils import check_env_specs
-from torchrl.objectives import ClipPPOLoss
-from torchrl.objectives.value import GAE
-from torch.utils.tensorboard import SummaryWriter
-from tqdm import tqdm
+from torchrl.data import ReplayBuffer, LazyTensorStorage, SamplerWithoutReplacement
+from torchrl.objectives import ClipPPOLoss, ValueEstimators
+import tqdm
 
-from src.sar_env import SearchAndRescueEnv
-from src.models import make_ppo_models, make_mappo_models
-
-
-def make_env(env_kwargs, device="cpu"):
-    """Create and wrap the environment."""
-    env = SearchAndRescueEnv(**env_kwargs, device=device)
-    env = TransformedEnv(
-        env,
-        Compose(
-            DoubleToFloat(),
-            StepCounter(),
-        ),
-    )
-    return env
+from src.models import make_policy, make_critic
+from src.sar_env import make_env
+from src.logger import RunContext, TensorboardLogger
 
 
 def train(
     steps: int = 100000,
     batch_size: int = 256,
+    learning_rate: float = 3e-4,
+    num_epochs: int = 10,
+    frames_per_batch: int = 2048,
     seed: int = 0,
     save_folder: str = "search_rescue_logs/",
-    algorithm: str = "mappo",
+    enable_logging: bool = True,
     **env_kwargs,
 ):
-    """Train a PPO/MAPPO agent on the search and rescue environment.
-
-    Args:
-        steps: Total training steps.
-        batch_size: Batch size for training.
-        seed: Random seed.
-        save_folder: Folder to save logs and models.
-        algorithm: "ppo" (local critic) or "mappo" (CTDE with global state critic).
-        **env_kwargs: Environment configuration.
-    """
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")
 
+    # Setup logging
+    run_ctx = RunContext(base_dir=save_folder, run_name=None, create_subdirs=True)
+    logger = TensorboardLogger.create(ctx=run_ctx, enabled=enable_logging)
+    if enable_logging:
+        print(f"TensorBoard logging enabled. Log directory: {run_ctx.tb_run_dir}")
+
     # Create environment
     env_kwargs["seed"] = seed
-    env = make_env(env_kwargs, device=device)
+    env = make_env(device=device, **env_kwargs)
 
     # Check environment specs
     check_env_specs(env)
 
-    print(f"Starting training on {env.base_env.metadata['name']}.")
-    print(f"Algorithm: {algorithm.upper()}")
-    print(f"Observation shape: {env.observation_spec['observation'].shape}")
-    print(f"Global state shape: {env.observation_spec['state'].shape}")
+    num_agents = env.base_env.num_rescuers
+    print(f"Starting MARL training on {env.base_env.metadata['name']}.")
+    print(f"Number of agents: {num_agents}")
+    print(f"Observation shape: {env.observation_spec['agents', 'observation'].shape}")
+    # print(f"Global state shape: {env.observation_spec['state'].shape}")
     print(f"Action spec: {env.action_spec}")
 
-    # Create models based on algorithm choice
-    if algorithm.lower() == "mappo":
-        # MAPPO: actor uses local obs, critic uses global state (CTDE)
-        actor, critic = make_mappo_models(env, device=device)
-        print("Critic using: global state (CTDE)")
-    else:
-        # PPO: both actor and critic use local observation
-        actor, critic = make_ppo_models(env, device=device)
-        print("Critic using: local observation")
+    # 1. Policy Network (Actor) - Decentralized
+    # Input: ("agents", "observation") -> [Batch, n_agents, obs_dim]
+    # Output: ("agents", "loc"), ("agents", "scale")
+    policy = make_policy(env, num_rescuers=num_agents, device=device)
 
-    # Create GAE module
-    adv_module = GAE(
-        gamma=0.99,
-        lmbda=0.95,
-        value_network=critic,
-        average_gae=True,
-    )
+    # 2. Value Network (Critic) - Centralized
+    # Input: All observations concatenated
+    # Output: Value per agent
+    critic = make_critic(env, num_rescuers=num_agents, device=device)
 
-    # Create PPO loss
-    loss_module = ClipPPOLoss(
-        actor=actor,
-        critic=critic,
-        clip_epsilon=0.2,
-        entropy_bonus=True,
-        entropy_coeff=0.01,
-        critic_coeff=0.5,
-        loss_critic_type="smooth_l1",
-    )
-
-    # Create optimizer
-    optim = torch.optim.Adam(loss_module.parameters(), lr=3e-4)
-
-    # Create data collector
-    frames_per_batch = min(batch_size, steps // 4)
-    print(f"Batch size (frames per batch): {frames_per_batch}")
     collector = SyncDataCollector(
         env,
-        actor,
+        policy,
         frames_per_batch=frames_per_batch,
         total_frames=steps,
-        split_trajs=False,
         device=device,
     )
 
-    # Setup tensorboard
-    writer = SummaryWriter(log_dir=save_folder)
+    replay_buffer = ReplayBuffer(
+        storage=LazyTensorStorage(frames_per_batch),
+        sampler=SamplerWithoutReplacement(),
+    )
 
-    # Training loop
-    ppo_epochs = 4
+    loss_module = ClipPPOLoss(
+        actor_network=policy,
+        critic_network=critic,
+        clip_epsilon=0.2,
+        entropy_bonus=True,
+        entropy_coeff=0.1,
+        normalize_advantage=True,
+        normalize_advantage_exclude_dims=(-1,),
+    )
+    loss_module.set_keys(
+        reward=env.reward_key,
+        action=env.action_key,
+        done=("agents", "done"),
+        terminated=("agents", "terminated"),  # TorchRL requires terminated
+        value=("agents", "state_value"),  # Output of critic
+    )
+    loss_module.make_value_estimator(ValueEstimators.GAE, gamma=0.99, lmbda=0.95)
+
+    optimizer = torch.optim.Adam(loss_module.parameters(), lr=learning_rate)
+
+    pbar = tqdm.tqdm(total=steps, unit="frames")
+    rewards_log = []
+    iteration = 0
     total_frames = 0
-    start_time = time.time()
 
-    pbar = tqdm(total=steps, desc="Training", unit="frames")
+    # Log hyperparameters
+    logger.log_dict(
+        "hyperparameters",
+        {
+            "learning_rate": learning_rate,
+            "num_epochs": num_epochs,
+            "frames_per_batch": frames_per_batch,
+            "batch_size": batch_size,
+            "total_steps": steps,
+            "seed": seed,
+            "num_agents": num_agents,
+        },
+        step=0,
+    )
 
-    for i, batch in enumerate(collector):
-        total_frames += batch.numel()
+    for batch in collector:
+        # 1. Prepare Batch
+        # Add 'terminated' if missing (older versions of wrappers might miss it)
+        if ("agents", "terminated") not in batch.keys(include_nested=True):
+            batch["agents", "terminated"] = batch["agents", "done"]
 
-        # Compute advantage
+        # Compute GAE
         with torch.no_grad():
-            adv_module(batch)
+            loss_module.value_estimator(
+                batch,
+                params=loss_module.critic_network_params,
+                target_params=loss_module.target_critic_network_params,
+            )
 
-        # Flatten batch for training
-        batch_flat = batch.reshape(-1)
+        # Flatten batch time dimensions
+        batch = batch.reshape(-1)
+        replay_buffer.extend(batch)
 
-        # PPO update - iterate through batch directly
-        batch_size = min(64, len(batch_flat))
-        loss_sum = torch.tensor(0.0)
+        minibatch_size = 128
 
-        for _ in range(ppo_epochs):
-            # Shuffle indices
-            indices = torch.randperm(len(batch_flat))
+        # 2. PPO Update
+        avg_loss_objective = 0.0
+        avg_loss_critic = 0.0
+        avg_loss_entropy = 0.0
+        avg_loss_total = 0.0
+        num_updates = 0
 
-            for start_idx in range(0, len(batch_flat), batch_size):
-                end_idx = min(start_idx + batch_size, len(batch_flat))
-                mb_indices = indices[start_idx:end_idx]
-                mb = batch_flat[mb_indices].to(device)
+        for _ in range(num_epochs):
+            for _ in range(frames_per_batch // minibatch_size):
+                subdata = replay_buffer.sample(minibatch_size)
+                loss_vals = loss_module(subdata)
 
-                loss = loss_module(mb)
-
-                loss_sum = (
-                    loss["loss_objective"] + loss["loss_critic"] + loss["loss_entropy"]
+                loss_value = (
+                    loss_vals["loss_objective"]
+                    + loss_vals["loss_critic"]
+                    + loss_vals["loss_entropy"]
                 )
 
-                optim.zero_grad()
-                loss_sum.backward()
+                optimizer.zero_grad()
+                loss_value.backward()
                 torch.nn.utils.clip_grad_norm_(loss_module.parameters(), 1.0)
-                optim.step()
+                optimizer.step()
 
-        # Logging
-        reward = batch["next", "reward"].mean().item()
-        done_rate = batch["next", "done"].float().mean().item()
+                # Accumulate losses for logging
+                avg_loss_objective += loss_vals["loss_objective"].item()
+                avg_loss_critic += loss_vals["loss_critic"].item()
+                avg_loss_entropy += loss_vals["loss_entropy"].item()
+                avg_loss_total += loss_value.item()
+                num_updates += 1
 
-        writer.add_scalar("reward/mean", reward, total_frames)
-        writer.add_scalar("done_rate", done_rate, total_frames)
-        writer.add_scalar("loss/total", loss_sum.item(), total_frames)
-
-        elapsed = time.time() - start_time
-        fps = total_frames / elapsed
-
+        # 3. Logging
         pbar.update(batch.numel())
-        pbar.set_postfix(reward=f"{reward:.2f}", fps=f"{fps:.0f}")
+        total_frames += batch.numel()
+        iteration += 1
+
+        # Log training losses
+        if num_updates > 0:
+            logger.log_dict(
+                "train/loss",
+                {
+                    "objective": avg_loss_objective / num_updates,
+                    "critic": avg_loss_critic / num_updates,
+                    "entropy": avg_loss_entropy / num_updates,
+                    "total": avg_loss_total / num_updates,
+                },
+                step=iteration,
+            )
+
+        # Check for completed episodes in the batch to log reward
+        # Note: Using next/done to filter
+        done_mask = batch["next", "agents", "done"].any(dim=-1)  # If any agent done
+        if done_mask.any():
+            mean_reward = (
+                batch["next", "agents", "episode_reward"][done_mask].mean().item()
+            )
+            rewards_log.append(mean_reward)
+            pbar.set_description(f"Mean Reward: {mean_reward:.2f}")
+
+            # Log episode metrics
+            logger.log_scalar("train/episode_reward", mean_reward, step=iteration)
+            logger.log_scalar("train/total_frames", total_frames, step=iteration)
+
+        collector.update_policy_weights_()
 
     pbar.close()
 
-    # Save model
-    model_path = f"{save_folder}/{env.base_env.metadata['name']}_{time.strftime('%Y%m%d-%H%M%S')}.pt"
+    # Save model in the run directory
+    model_path = (
+        run_ctx.run_dir
+        / f"{env.base_env.metadata['name']}_{time.strftime('%Y%m%d-%H%M%S')}.pt"
+    )
+    model_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Save environment configuration for evaluation
+    env_config = {
+        "num_victims": env.base_env.num_victims,
+        "num_rescuers": env.base_env.num_rescuers,
+        "num_trees": env.base_env.num_trees,
+        "num_safe_zones": env.base_env.num_safe_zones,
+        "max_cycles": env.base_env.max_steps,
+        "continuous_actions": env.base_env.is_continuous,
+        "vision_radius": env.base_env.vision_radius,
+    }
+
     torch.save(
         {
-            "actor": actor.state_dict(),
-            "critic": critic.state_dict(),
+            "policy_state_dict": policy.state_dict(),
+            "critic_state_dict": critic.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+            "total_frames": total_frames,
+            "iteration": iteration,
+            "env_config": env_config,
         },
-        model_path,
+        str(model_path),
     )
-    print(f"Model saved to {model_path}")
 
-    writer.close()
+    # Log final summary
+    if rewards_log:
+        final_mean_reward = sum(rewards_log) / len(rewards_log)
+        logger.log_scalar("train/final_mean_reward", final_mean_reward, step=iteration)
+        logger.log_scalar("train/total_episodes", len(rewards_log), step=iteration)
+
+    logger.close()
     collector.shutdown()
     env.close()
 
-    print(f"Finished training on {env.base_env.metadata['name']}.")
+    print(f"Finished MARL training on {env.base_env.metadata['name']}.")
+    print(f"Model saved to: {model_path}")
+    if enable_logging:
+        print(f"TensorBoard logs available at: {run_ctx.tb_run_dir}")
