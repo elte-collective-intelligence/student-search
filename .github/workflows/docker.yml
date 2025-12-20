@@ -10,7 +10,6 @@ on:
       - main
       - "[0-9][0-9][0-9][0-9]/[0-9][0-9]/1"
       - "[0-9][0-9][0-9][0-9]/[0-9][0-9]/2"
-  workflow_dispatch:
 jobs:
   docker:
     runs-on: ubuntu-latest
@@ -28,6 +27,26 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - id: compute_tag
+        name: Compute sanitized branch tag and short SHA
+        shell: bash
+        run: |
+          if [ -n "$GITHUB_HEAD_REF" ]; then
+            BRANCH="$GITHUB_HEAD_REF"
+          else
+            BRANCH="${GITHUB_REF#refs/heads/}"
+          fi
+          BRANCH_TAG=$(echo "$BRANCH" | tr '[:upper:]' '[:lower:]' | sed 's/\//-/g' | sed 's/[^a-z0-9._-]/-/g' | sed 's/^-*//; s/-*$//')
+          SHORT_SHA=${GITHUB_SHA:0:7}
+          REPO="$GITHUB_REPOSITORY"
+          if [ "$BRANCH_TAG" = "main" ] || [ -z "$BRANCH_TAG" ]; then
+            TAGS="ghcr.io/${REPO}:latest,ghcr.io/${REPO}:${SHORT_SHA}"
+          else
+            TAGS="ghcr.io/${REPO}:latest,ghcr.io/${REPO}:${BRANCH_TAG},ghcr.io/${REPO}:${SHORT_SHA}"
+          fi
+          echo "BRANCH_TAG=$BRANCH_TAG" >> $GITHUB_OUTPUT
+          echo "SHORT_SHA=$SHORT_SHA" >> $GITHUB_OUTPUT
+          echo "TAGS=$TAGS" >> $GITHUB_OUTPUT
 
       - uses: docker/build-push-action@v6
         with:
@@ -37,6 +56,6 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.created=${{ github.run_id }}
-          tags: ${{ github.ref_name == 'main' && format('ghcr.io/{0}:latest', github.repository) || format('ghcr.io/{0}:latest,ghcr.io/{0}:{1}', github.repository, github.ref_name) }}
+          tags: ${{ steps.compute_tag.outputs.TAGS }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
