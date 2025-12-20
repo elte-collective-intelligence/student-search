@@ -65,7 +65,7 @@ class SearchAndRescueEnv(ParallelEnv):
         }
 
         # Observation Space Calculation
-        # [Self_Vel(2), Self_Pos(2),
+        # [Self_Vel(2), Self_Pos(2), Agent_ID(num_rescuers),
         #  SafeZones(4 * 3: rel_x, rel_y, type_idx),
         #  Trees(N * 2: rel_x, rel_y),
         #  Victims(N * 3: rel_x, rel_y, type_idx)]
@@ -73,6 +73,7 @@ class SearchAndRescueEnv(ParallelEnv):
 
         self.obs_dim = (
             4
+            + num_rescuers  # Agent ID one-hot encoding
             + (self.num_safe_zones * 3)
             + (self.num_trees * 2)
             + (self.num_victims * 3)
@@ -103,6 +104,9 @@ class SearchAndRescueEnv(ParallelEnv):
         self.victim_pos = np.random.uniform(-0.8, 0.8, (self.num_victims, 2))
         self.victim_vel = np.zeros((self.num_victims, 2))
         self.victim_saved = np.zeros(self.num_victims, dtype=bool)
+
+        # Track which agent each victim is committed to (-1 = none)
+        self.victim_assignments = np.full(self.num_victims, -1, dtype=int)
 
         self.tree_pos = np.random.uniform(-0.8, 0.8, (self.num_trees, 2))
 
@@ -159,7 +163,12 @@ class SearchAndRescueEnv(ParallelEnv):
             obs_vec.extend(self.rescuer_vel[i])
             obs_vec.extend(my_pos)
 
-            # 2. Safe Zones (Global knowledge assumed for static zones)
+            # 2. Agent ID (one-hot encoding to break symmetry)
+            agent_id_onehot = np.zeros(self.num_rescuers)
+            agent_id_onehot[i] = 1.0
+            obs_vec.extend(agent_id_onehot)
+
+            # 3. Safe Zones (Global knowledge assumed for static zones)
             for sz_i in range(self.num_safe_zones):
                 rel_pos = self.safezone_pos[sz_i] - my_pos
                 # We append the numeric type (0-3) so the network knows which zone is which
@@ -167,14 +176,14 @@ class SearchAndRescueEnv(ParallelEnv):
                     [rel_pos[0], rel_pos[1], float(self.safe_zone_types[sz_i])]
                 )
 
-            # 3. Trees
+            # 4. Trees
             for t_i in range(self.num_trees):
                 if self._is_visible(my_pos, self.tree_pos[t_i], self.tree_radius):
                     obs_vec.extend(self.tree_pos[t_i] - my_pos)
                 else:
                     obs_vec.extend([0.0, 0.0])  # Masked
 
-            # 4. Victims
+            # 5. Victims
             for v_i in range(self.num_victims):
                 # If visible and not saved
                 if not self.victim_saved[v_i] and self._is_visible(
@@ -249,28 +258,81 @@ class SearchAndRescueEnv(ParallelEnv):
                         v - (1.5 * vn) * n
                     )  # reflect and damp (~0.5 after reflection)
 
-        # 2. Victim Dynamics
-        # TODO: IDEA: set victims up so that when they start following an agent, they will keep following it
+        # Agent-Agent Collision Physics (soft repulsion to prevent clustering)
+        agent_repulsion_radius = 0.15
+        repulsion_strength = 0.005
+        for i in range(len(self.agents)):
+            for j in range(i + 1, len(self.agents)):
+                to_other = self.rescuer_pos[i] - self.rescuer_pos[j]
+                dist = np.linalg.norm(to_other)
+
+                if dist < agent_repulsion_radius and dist > 1e-6:
+                    # Apply soft repulsion force inversely proportional to distance
+                    repulsion_force = (
+                        repulsion_strength * (agent_repulsion_radius - dist) / dist
+                    )
+                    direction = to_other / dist
+
+                    # Apply equal and opposite forces
+                    self.rescuer_vel[i] += direction * repulsion_force
+                    self.rescuer_vel[j] -= direction * repulsion_force
+
+        # 2. Victim Dynamics with Commitment System
+        # Victims commit to an agent when approached, and maintain commitment
+        # until the agent leaves or another agent is significantly closer
         for v_i in range(self.num_victims):
             if self.victim_saved[v_i]:
                 self.victim_vel[v_i] = 0
                 continue
 
-            # Check for closest agent within follow radius
+            # Find closest agent and their distance
             min_dist = float("inf")
-            closest_agent_pos = None
-            for a_pos in self.rescuer_pos:
+            closest_agent_idx = -1
+            for a_i, a_pos in enumerate(self.rescuer_pos):
                 dist = np.linalg.norm(a_pos - self.victim_pos[v_i])
                 if dist < min_dist:
                     min_dist = dist
-                    closest_agent_pos = a_pos
+                    closest_agent_idx = a_i
 
-            if min_dist < self.follow_radius:
-                # Follow the closest agent
-                direction = (closest_agent_pos - self.victim_pos[v_i]) / (
-                    min_dist + 1e-6
+            current_assignment = self.victim_assignments[v_i]
+
+            # Commitment logic with hysteresis
+            if current_assignment == -1:
+                # Not assigned - assign if agent is close enough
+                if min_dist < self.follow_radius:
+                    self.victim_assignments[v_i] = closest_agent_idx
+                    current_assignment = closest_agent_idx
+            else:
+                # Already assigned - check if we should switch or release
+                assigned_agent_pos = self.rescuer_pos[current_assignment]
+                dist_to_assigned = np.linalg.norm(
+                    assigned_agent_pos - self.victim_pos[v_i]
                 )
-                follow_force = 0.02  # Adjust speed towards agent
+
+                # Release if assigned agent is too far (1.5x follow radius = hysteresis)
+                if dist_to_assigned > self.follow_radius * 1.5:
+                    self.victim_assignments[v_i] = -1
+                    current_assignment = -1
+                    # Reassign if another agent is close
+                    if min_dist < self.follow_radius:
+                        self.victim_assignments[v_i] = closest_agent_idx
+                        current_assignment = closest_agent_idx
+                # Switch only if another agent is significantly closer (0.6x distance)
+                elif (
+                    closest_agent_idx != current_assignment
+                    and min_dist < dist_to_assigned * 0.6
+                ):
+                    self.victim_assignments[v_i] = closest_agent_idx
+                    current_assignment = closest_agent_idx
+
+            # Movement based on assignment
+            if current_assignment != -1:
+                # Follow assigned agent
+                assigned_pos = self.rescuer_pos[current_assignment]
+                direction = (assigned_pos - self.victim_pos[v_i]) / (
+                    np.linalg.norm(assigned_pos - self.victim_pos[v_i]) + 1e-6
+                )
+                follow_force = 0.02
                 self.victim_vel[v_i] = (
                     self.victim_vel[v_i] * 0.8 + direction * follow_force
                 )
@@ -426,39 +488,48 @@ class SearchAndRescueEnv(ParallelEnv):
             dist_to_zone = np.linalg.norm(v_pos - target_zone_pos)
 
             # Victim got saved
-            # TODO: IDEA: maybe only reward the agent it was following
             if dist_to_zone < self.safe_zone_radius:
                 self.victim_saved[v_i] = True
                 saved_count += 1
-                # Big Reward to the closest agent
-                min_dist = float("inf")
-                closest_agent = None
-                for j, a in enumerate(self.agents):
-                    dist = np.linalg.norm(self.rescuer_pos[j] - v_pos)
-                    if dist < min_dist:
-                        min_dist = dist
-                        closest_agent = a
-                if closest_agent is not None:
-                    rewards[closest_agent] += 100.0
 
-        # Individual credit: reward agent for leading victim toward safe zone
-        # TODO: IDEA: again either higher reward for the agent it is following
-        # or only that agent should get reward in the first place
+                # Reward the assigned agent (who escorted the victim)
+                # If no assignment, fall back to closest agent
+                assigned_agent_idx = self.victim_assignments[v_i]
+                if assigned_agent_idx != -1 and assigned_agent_idx < len(self.agents):
+                    # Primary reward to assigned agent who did the work
+                    rewards[self.agents[assigned_agent_idx]] += 100.0
+                else:
+                    # Fallback: reward closest agent
+                    min_dist = float("inf")
+                    closest_agent = None
+                    for j, a in enumerate(self.agents):
+                        dist = np.linalg.norm(self.rescuer_pos[j] - v_pos)
+                        if dist < min_dist:
+                            min_dist = dist
+                            closest_agent = a
+                    if closest_agent is not None:
+                        rewards[closest_agent] += 100.0
+
+                # Small bonus to nearby assisting agents (within follow radius)
+                for j, a in enumerate(self.agents):
+                    if j != assigned_agent_idx:
+                        dist = np.linalg.norm(self.rescuer_pos[j] - v_pos)
+                        if dist < self.follow_radius:
+                            rewards[a] += 10.0  # 10% bonus for assisting
+
+        # Individual credit: reward assigned agent for escorting victim toward safe zone
         for v_i in range(self.num_victims):
             if not self.victim_saved[v_i]:
-                # Find which agent (if any) is following this victim
-                for i, agent in enumerate(self.agents):
-                    dist_to_victim = np.linalg.norm(
-                        self.rescuer_pos[i] - self.victim_pos[v_i]
+                assigned_agent_idx = self.victim_assignments[v_i]
+
+                # Only reward the assigned agent (stronger signal for credit assignment)
+                if assigned_agent_idx != -1 and assigned_agent_idx < len(self.agents):
+                    agent = self.agents[assigned_agent_idx]
+                    dist_to_zone = np.linalg.norm(
+                        self.victim_pos[v_i] - self.safezone_pos[self.victim_types[v_i]]
                     )
-                    if dist_to_victim < self.follow_radius:
-                        dist_to_zone = np.linalg.norm(
-                            self.victim_pos[v_i]
-                            - self.safezone_pos[self.victim_types[v_i]]
-                        )
-                        rewards[agent] += 0.5 / (
-                            dist_to_zone + 1e-6
-                        )  # TODO: rethink scale
+                    # Reward proportional to inverse distance (closer to goal = higher reward)
+                    rewards[agent] += 1.0 / (dist_to_zone + 1e-6)
 
         # Boundary penalties
         for i, agent in enumerate(self.agents):
@@ -466,45 +537,16 @@ class SearchAndRescueEnv(ParallelEnv):
             if abs(pos[0]) > 0.95 or abs(pos[1]) > 0.95:
                 rewards[agent] -= 1
 
-        # Agent collision penalty - penalize agents that are too close to each other
-        # TODO: also add some bouncing mechanism when they collide
+        # Agent collision penalty (physical repulsion is now handled earlier)
         num_agents = len(self.agents)
         if num_agents > 1:
             for i in range(num_agents):
                 for j in range(i + 1, num_agents):
                     dist = np.linalg.norm(self.rescuer_pos[i] - self.rescuer_pos[j])
                     if dist < 0.15:  # Agents are overlapping/colliding
-                        # Strong penalty to both agents
-                        rewards[self.agents[i]] -= 1.0
-                        rewards[self.agents[j]] -= 1.0
-
-        # Victim assignment bonus - reward agents for targeting different victims
-        unsaved_indices = [k for k, saved in enumerate(self.victim_saved) if not saved]
-        if num_agents > 1 and len(unsaved_indices) > 1:
-            # Find which victim each agent is closest to
-            agent_targets = []
-            for i in range(num_agents):
-                min_dist = float("inf")
-                closest_victim = None
-                for v_i in unsaved_indices:
-                    dist = np.linalg.norm(self.rescuer_pos[i] - self.victim_pos[v_i])
-                    if dist < min_dist:
-                        min_dist = dist
-                        closest_victim = v_i
-                agent_targets.append(closest_victim)
-
-            # Count unique victims being targeted
-            unique_targets = len(set(agent_targets))
-            # Bonus scales with task division (max when all agents target different victims)
-            # TODO: rethink scale or remove this whole thing
-            if unique_targets > 1:
-                division_bonus = (
-                    0.25
-                    * (unique_targets - 1)
-                    / (min(num_agents, len(unsaved_indices)) - 1)
-                )
-                for a in self.agents:
-                    rewards[a] += division_bonus
+                        # Stronger penalty to discourage clustering (increased from -1.0)
+                        rewards[self.agents[i]] -= 5.0
+                        rewards[self.agents[j]] -= 5.0
 
         return saved_count
 
