@@ -12,6 +12,13 @@ from src.sar_env import make_env
 from src.logger import RunContext, TensorboardLogger
 
 
+def _get_metrics_env(env):
+    base = getattr(env, "base_env", None)
+    while base is not None and not hasattr(base, "pop_episode_metrics"):
+        base = getattr(base, "base_env", getattr(base, "_env", None))
+    return base if base is not None else env
+
+
 def train(
     steps: int = 100000,
     batch_size: int = 256,
@@ -111,6 +118,8 @@ def train(
     )
 
     for batch in collector:
+        metrics_env = _get_metrics_env(env)
+
         # 1. Prepare Batch
         # Add 'terminated' if missing (older versions of wrappers might miss it)
         if ("agents", "terminated") not in batch.keys(include_nested=True):
@@ -191,6 +200,23 @@ def train(
             # Log episode metrics
             logger.log_scalar("train/episode_reward", mean_reward, step=iteration)
             logger.log_scalar("train/total_frames", total_frames, step=iteration)
+
+            # Pull environment metrics for the just-finished episodes
+            metrics = metrics_env.pop_episode_metrics()
+            if metrics:
+                # Aggregate across episodes that finished in this batch
+                rescues_pct = sum(m["rescues_pct"] for m in metrics) / len(metrics)
+                collisions = sum(m["collisions"] for m in metrics) / len(metrics)
+                coverage = sum(m["coverage_cells"] for m in metrics) / len(metrics)
+                logger.log_dict(
+                    "train/episode_metrics",
+                    {
+                        "rescues_pct": rescues_pct,
+                        "collisions": collisions,
+                        "coverage_cells": coverage,
+                    },
+                    step=iteration,
+                )
 
         collector.update_policy_weights_()
 

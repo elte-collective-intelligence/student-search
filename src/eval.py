@@ -34,6 +34,14 @@ def find_latest_model(save_folder: str, env_name: str) -> str:
     return latest_file
 
 
+def _get_metrics_env(env):
+    base = getattr(env, "base_env", None)
+    # Walk down wrappers until we find the environment exposing metrics
+    while base is not None and not hasattr(base, "pop_episode_metrics"):
+        base = getattr(base, "base_env", getattr(base, "_env", None))
+    return base if base is not None else env
+
+
 def evaluate(
     model_path: str = None,
     save_folder: str = "search_rescue_logs",
@@ -113,6 +121,10 @@ def evaluate(
     # Track evaluation metrics
     episode_rewards = []
     episode_steps = []
+    rescues_pct_log = []
+    collisions_log = []
+    coverage_log = []
+    metrics_env = _get_metrics_env(env)
 
     for i in range(num_games):
         td = env.reset()
@@ -169,6 +181,17 @@ def evaluate(
             "eval/mean_reward_per_step", episode_reward / max(step_count, 1), step=i + 1
         )
 
+        # Log environment metrics (rescues %, collisions, coverage)
+        metrics = metrics_env.pop_episode_metrics()
+        if metrics:
+            m = metrics[-1]
+            rescues_pct_log.append(m["rescues_pct"])
+            collisions_log.append(m["collisions"])
+            coverage_log.append(m["coverage_cells"])
+            logger.log_scalar("eval/rescues_pct", m["rescues_pct"], step=i + 1)
+            logger.log_scalar("eval/collisions", m["collisions"], step=i + 1)
+            logger.log_scalar("eval/coverage_cells", m["coverage_cells"], step=i + 1)
+
         print(
             f"Episode {i + 1} finished in {step_count} steps. Total reward: {episode_reward:.2f}"
         )
@@ -180,6 +203,20 @@ def evaluate(
         logger.log_scalar("eval/mean_episode_reward", mean_reward, step=num_games)
         logger.log_scalar("eval/mean_episode_steps", mean_steps, step=num_games)
         logger.log_scalar("eval/total_episodes", num_games, step=num_games)
+
+    if rescues_pct_log:
+        mean_rescues_pct = sum(rescues_pct_log) / len(rescues_pct_log)
+        mean_collisions = sum(collisions_log) / len(collisions_log)
+        mean_coverage = sum(coverage_log) / len(coverage_log)
+        logger.log_dict(
+            "eval/summary",
+            {
+                "rescues_pct": mean_rescues_pct,
+                "collisions": mean_collisions,
+                "coverage_cells": mean_coverage,
+            },
+            step=num_games,
+        )
 
     logger.close()
     print("Evaluation finished.")
