@@ -120,14 +120,25 @@ class SearchAndRescueEnv(ParallelEnv):
 
         return self._get_obs(), {a: {} for a in self.agents}
 
-    def _is_visible(self, observer_pos, target_pos, target_radius):
-        """Checks distance and occlusion by trees."""
+    def _is_visible(self, observer_pos, target_pos, target_radius, exclude_tree_idx=None):
+        """Checks distance and occlusion by trees.
+        
+        Args:
+            observer_pos: Position of the observer
+            target_pos: Position of the target to check visibility of
+            target_radius: Radius of the target (used for distance check)
+            exclude_tree_idx: Optional tree index to exclude from occlusion check
+                            (e.g., when checking if a tree itself is visible)
+        """
         dist = np.linalg.norm(target_pos - observer_pos)
         if dist > self.vision_radius:
             return False
 
-        # Check line of sight against all trees
+        # Check line of sight against all trees (excluding the tree being checked if specified)
         for t_idx in range(self.num_trees):
+            if exclude_tree_idx is not None and t_idx == exclude_tree_idx:
+                continue  # Skip the tree being checked
+            
             tree_c = self.tree_pos[t_idx]
 
             if (tree_c == target_pos).all():
@@ -182,7 +193,7 @@ class SearchAndRescueEnv(ParallelEnv):
 
             # 4. Trees
             for t_i in range(self.num_trees):
-                if self._is_visible(my_pos, self.tree_pos[t_i], self.tree_radius):
+                if self._is_visible(my_pos, self.tree_pos[t_i], self.tree_radius, exclude_tree_idx=t_i):
                     obs_vec.extend(self.tree_pos[t_i] - my_pos)
                 else:
                     obs_vec.extend([0.0, 0.0])  # Masked
