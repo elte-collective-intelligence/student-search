@@ -250,6 +250,7 @@ class SearchAndRescueEnv(ParallelEnv):
                     )  # reflect and damp (~0.5 after reflection)
 
         # 2. Victim Dynamics
+        # TODO: IDEA: set victims up so that when they start following an agent, they will keep following it
         for v_i in range(self.num_victims):
             if self.victim_saved[v_i]:
                 self.victim_vel[v_i] = 0
@@ -380,7 +381,7 @@ class SearchAndRescueEnv(ParallelEnv):
         if self.screen:
             pygame.quit()
 
-    def _compute_agent_victim_dists(self):
+    def _compute_agent_victim_dists(self) -> list[float]:
         """Compute min distance from each agent to nearest unsaved victim."""
         dists = []
         unsaved_indices = [k for k, saved in enumerate(self.victim_saved) if not saved]
@@ -417,14 +418,15 @@ class SearchAndRescueEnv(ParallelEnv):
                 continue
 
             v_pos = self.victim_pos[v_i]
-            v_type_idx = self.victim_types[v_i]  # Int 0-3
+            v_type_idx = self.victim_types[v_i]
 
             # Find pos of safe zone with matching type
-            # Assuming safe_zone_types is [0, 1, 2, 3] aligned with safezone_pos indices
             target_zone_pos = self.safezone_pos[v_type_idx]
 
             dist_to_zone = np.linalg.norm(v_pos - target_zone_pos)
 
+            # Victim got saved
+            # TODO: IDEA: maybe only reward the agent it was following
             if dist_to_zone < self.safe_zone_radius:
                 self.victim_saved[v_i] = True
                 saved_count += 1
@@ -440,6 +442,8 @@ class SearchAndRescueEnv(ParallelEnv):
                     rewards[closest_agent] += 100.0
 
         # Individual credit: reward agent for leading victim toward safe zone
+        # TODO: IDEA: again either higher reward for the agent it is following
+        # or only that agent should get reward in the first place
         for v_i in range(self.num_victims):
             if not self.victim_saved[v_i]:
                 # Find which agent (if any) is following this victim
@@ -452,16 +456,18 @@ class SearchAndRescueEnv(ParallelEnv):
                             self.victim_pos[v_i]
                             - self.safezone_pos[self.victim_types[v_i]]
                         )
-                        # 5x magnitude: 0.5 instead of 0.1
-                        rewards[agent] += 0.5 / (dist_to_zone + 1e-6)
+                        rewards[agent] += 0.5 / (
+                            dist_to_zone + 1e-6
+                        )  # TODO: rethink scale
 
         # Boundary penalties
         for i, agent in enumerate(self.agents):
             pos = self.rescuer_pos[i]
-            if abs(pos[0]) > 0.8 or abs(pos[1]) > 0.8:
+            if abs(pos[0]) > 0.95 or abs(pos[1]) > 0.95:
                 rewards[agent] -= 1
 
         # Agent collision penalty - penalize agents that are too close to each other
+        # TODO: also add some bouncing mechanism when they collide
         num_agents = len(self.agents)
         if num_agents > 1:
             for i in range(num_agents):
@@ -490,7 +496,7 @@ class SearchAndRescueEnv(ParallelEnv):
             # Count unique victims being targeted
             unique_targets = len(set(agent_targets))
             # Bonus scales with task division (max when all agents target different victims)
-            # 5x magnitude: 0.25 instead of 0.05
+            # TODO: rethink scale or remove this whole thing
             if unique_targets > 1:
                 division_bonus = (
                     0.25
