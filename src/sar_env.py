@@ -440,11 +440,9 @@ class SearchAndRescueEnv(ParallelEnv):
             color = self.type_colors[type_idx]
 
             s = pygame.Surface((r * 2, r * 2), pygame.SRCALPHA)
-            s.fill((*color, 50))
+            pygame.draw.circle(s, (*color, 50), (r, r), r)
             self.screen.blit(s, (s_pos[0] - r, s_pos[1] - r))
-            pygame.draw.rect(
-                self.screen, color, (s_pos[0] - r, s_pos[1] - r, r * 2, r * 2), 2
-            )
+            pygame.draw.circle(self.screen, color, s_pos, r, 2)
 
         # Draw Trees
         for pos in self.tree_pos:
