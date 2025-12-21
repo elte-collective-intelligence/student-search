@@ -146,7 +146,7 @@ def test_step_increments_counter(make_env):
     assert env.steps == 0, "Initial steps should be 0"
 
     actions = {env.agents[0]: np.array([0.0, 0.0])}
-    obs, rewards, terminations, truncations, infos = env.step(actions)
+    env.step(actions)
 
     assert env.steps == 1, "Steps should increment to 1"
 
@@ -165,7 +165,7 @@ def test_step_applies_actions(make_env):
     # Apply action
     action = np.array([0.1, 0.1])
     actions = {env.agents[0]: action}
-    obs, rewards, terminations, truncations, infos = env.step(actions)
+    env.step(actions)
 
     # Velocity should be updated (with damping)
     expected_vel = initial_vel * 0.8 + action * 0.1
@@ -188,7 +188,7 @@ def test_step_velocity_clamping(make_env):
     # Apply very large action
     action = np.array([10.0, 10.0])
     actions = {env.agents[0]: action}
-    obs, rewards, terminations, truncations, infos = env.step(actions)
+    env.step(actions)
 
     speed = np.linalg.norm(env.rescuer_vel[0])
     assert speed <= 0.08, f"Speed should be clamped to 0.08, got {speed}"
@@ -204,7 +204,7 @@ def test_step_wall_collision(make_env):
     env.rescuer_vel[0] = np.array([0.1, 0.0])
 
     actions = {env.agents[0]: np.array([0.0, 0.0])}
-    obs, rewards, terminations, truncations, infos = env.step(actions)
+    env.step(actions)
 
     # Position should be clamped
     assert env.rescuer_pos[0][0] <= 1.0, "Position should be clamped to 1.0"
@@ -246,7 +246,7 @@ def test_step_agent_repulsion(make_env):
     initial_dist = np.linalg.norm(env.rescuer_pos[0] - env.rescuer_pos[1])
 
     actions = {agent: np.array([0.0, 0.0]) for agent in env.agents}
-    obs, rewards, terminations, truncations, infos = env.step(actions)
+    env.step(actions)
 
     # Agents should be pushed apart (or at least not get closer)
     final_dist = np.linalg.norm(env.rescuer_pos[0] - env.rescuer_pos[1])
@@ -267,7 +267,7 @@ def test_step_victim_assignment(make_env):
     env.victim_pos[0] = np.array([0.15, 0.0])  # Within follow_radius (0.2) of agent 0
 
     actions = {agent: np.array([0.0, 0.0]) for agent in env.agents}
-    obs, rewards, terminations, truncations, infos = env.step(actions)
+    env.step(actions)
 
     # Victim should be assigned to closest agent
     assert env.victim_assignments[0] == 0, "Victim should be assigned to agent 0"
@@ -285,7 +285,7 @@ def test_step_victim_follows_assigned_agent(make_env):
 
     # Move agent away
     actions = {env.agents[0]: np.array([0.05, 0.0])}
-    obs, rewards, terminations, truncations, infos = env.step(actions)
+    env.step(actions)
 
     # Victim should move toward agent (distance should decrease or stay similar)
     final_dist = np.linalg.norm(env.rescuer_pos[0] - env.victim_pos[0])
@@ -346,6 +346,8 @@ def test_step_truncation_max_steps(make_env):
     obs, _ = env.reset()
 
     actions = {env.agents[0]: np.array([0.0, 0.0])}
+
+    truncations = {a: False for a in env.agents}
 
     # Step until max_steps
     for _ in range(5):
@@ -448,7 +450,7 @@ def test_step_victim_brownian_motion(make_env):
     initial_pos = env.victim_pos[0].copy()
 
     actions = {env.agents[0]: np.array([0.0, 0.0])}
-    obs, rewards, terminations, truncations, infos = env.step(actions)
+    env.step(actions)
 
     # Victim should move (Brownian motion)
     final_pos = env.victim_pos[0]
@@ -469,7 +471,7 @@ def test_step_saved_victim_stationary(make_env):
     initial_pos = env.victim_pos[0].copy()
 
     actions = {env.agents[0]: np.array([0.0, 0.0])}
-    obs, rewards, terminations, truncations, infos = env.step(actions)
+    env.step(actions)
 
     # Victim should not move
     assert np.allclose(env.victim_pos[0], initial_pos), "Saved victim should not move"

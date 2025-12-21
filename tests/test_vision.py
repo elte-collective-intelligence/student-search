@@ -1,4 +1,40 @@
 import numpy as np
+import pytest
+
+
+@pytest.fixture
+def make_simple_env(make_env):
+    """Default small env for most occlusion/vision tests."""
+
+    def _make(
+        *,
+        num_rescuers=1,
+        num_victims=1,
+        num_trees=1,
+        num_safe_zones=0,
+        seed=42,
+        vision_radius=1.0,
+        **kwargs,
+    ):
+        return make_env(
+            num_rescuers=num_rescuers,
+            num_victims=num_victims,
+            num_trees=num_trees,
+            num_safe_zones=num_safe_zones,
+            seed=seed,
+            vision_radius=vision_radius,
+            **kwargs,
+        )
+
+    return _make
+
+
+@pytest.fixture
+def env_simple(make_simple_env):
+    """Most common config env, already reset."""
+    env = make_simple_env()
+    env.reset()
+    return env
 
 
 def _get_obs_slice_indices(env):
@@ -28,29 +64,9 @@ def _get_obs_slice_indices(env):
     }
 
 
-def _make_simple_env(make_env):
-    """Helper function to create a simple environment for occlusion tests."""
-    return make_env(
-        num_rescuers=1,
-        num_victims=1,
-        num_trees=1,
-        num_safe_zones=0,
-        seed=42,
-        vision_radius=1.0,
-    )
-
-
-def test_occlusion_blocks_tree_in_observation(make_env):
+def test_occlusion_blocks_tree_in_observation(make_simple_env):
     """Test that trees block vision and visibility masks are set correctly."""
-    env = make_env(
-        num_rescuers=1,
-        num_victims=1,
-        num_trees=1,
-        num_safe_zones=0,
-        seed=123,
-        vision_radius=1.0,  # Use larger vision to test occlusion
-    )
-
+    env = make_simple_env(seed=123)
     obs, _ = env.reset()
     agent = env.agents[0]
     agent_idx = 0
@@ -98,17 +114,9 @@ def test_occlusion_blocks_tree_in_observation(make_env):
     assert victim_obs[2] == 0.0, f"Victim type should be 0, got {victim_obs[2]}"
 
 
-def test_vision_radius_masks_distant_entities(make_env):
+def test_vision_radius_masks_distant_entities(make_simple_env):
     """Test that entities beyond vision radius are masked."""
-    env = make_env(
-        num_rescuers=1,
-        num_victims=1,
-        num_trees=1,
-        num_safe_zones=0,
-        seed=42,
-        vision_radius=0.5,  # Explicit vision radius for testing
-    )
-
+    env = make_simple_env(vision_radius=0.5)
     obs, _ = env.reset()
     agent = env.agents[0]
     agent_idx = 0
@@ -159,17 +167,9 @@ def test_vision_radius_masks_distant_entities(make_env):
     ), f"Tree should be masked (too far). Got {tree_obs}, expected [0.0, 0.0]"
 
 
-def test_occlusion_no_block_when_tree_outside_segment(make_env):
+def test_occlusion_no_block_when_tree_outside_segment(env_simple):
     """Test that trees behind observer or target don't block vision."""
-    env = make_env(
-        num_rescuers=1,
-        num_victims=1,
-        num_trees=1,
-        num_safe_zones=0,
-        seed=42,
-        vision_radius=1.0,
-    )
-
+    env = env_simple
     obs, _ = env.reset()
     agent_idx = 0
 
@@ -195,17 +195,9 @@ def test_occlusion_no_block_when_tree_outside_segment(make_env):
     ), "Tree between observer and target should block vision"
 
 
-def test_saved_victims_are_masked(make_env):
+def test_saved_victims_are_masked(make_simple_env):
     """Test that saved victims are always masked in observations."""
-    env = make_env(
-        num_rescuers=1,
-        num_victims=1,
-        num_trees=0,
-        num_safe_zones=1,
-        seed=42,
-        vision_radius=1.0,
-    )
-
+    env = make_simple_env(num_trees=0, num_safe_zones=1)
     obs, _ = env.reset()
     agent = env.agents[0]
     agent_idx = 0
@@ -286,17 +278,9 @@ def test_observation_structure_correctness(make_env):
         ), f"Safe zones should have shape ({env.num_safe_zones * 3},), got {safe_zones.shape}"
 
 
-def test_multiple_trees_occlusion(make_env):
+def test_multiple_trees_occlusion(make_simple_env):
     """Test that multiple trees can block vision correctly."""
-    env = make_env(
-        num_rescuers=1,
-        num_victims=1,
-        num_trees=2,
-        num_safe_zones=0,
-        seed=42,
-        vision_radius=1.0,
-    )
-
+    env = make_simple_env(num_trees=2)
     obs, _ = env.reset()
     agent_idx = 0
 
@@ -319,17 +303,9 @@ def test_multiple_trees_occlusion(make_env):
     ), "No tree should block vision now"
 
 
-def test_vision_radius_edge_case(make_env):
+def test_vision_radius_edge_case(make_simple_env):
     """Test vision at exactly the vision radius boundary."""
-    env = make_env(
-        num_rescuers=1,
-        num_victims=1,
-        num_trees=0,
-        num_safe_zones=0,
-        seed=42,
-        vision_radius=0.5,
-    )
-
+    env = make_simple_env(vision_radius=0.5, num_trees=0)
     obs, _ = env.reset()
     agent_idx = 0
 
@@ -352,17 +328,11 @@ def test_vision_radius_edge_case(make_env):
     ), "Entity just beyond vision radius should not be visible"
 
 
-def test_safe_zones_always_visible(make_env):
+def test_safe_zones_always_visible(make_simple_env):
     """Test that safe zones are always visible regardless of distance or occlusion."""
-    env = make_env(
-        num_rescuers=1,
-        num_victims=0,
-        num_trees=1,
-        num_safe_zones=4,
-        seed=42,
-        vision_radius=0.3,  # Small vision radius
+    env = make_simple_env(
+        num_victims=0, num_trees=1, num_safe_zones=4, vision_radius=0.3
     )
-
     obs, _ = env.reset()
     agent = env.agents[0]
     agent_idx = 0
@@ -398,17 +368,9 @@ def test_safe_zones_always_visible(make_env):
         ), f"Safe zone {i} type incorrect. Got {zone_type}, expected {env.safe_zone_types[i]}"
 
 
-def test_tree_occludes_other_trees(make_env):
+def test_tree_occludes_other_trees(make_simple_env):
     """Test that a tree can occlude another tree."""
-    env = make_env(
-        num_rescuers=1,
-        num_victims=0,
-        num_trees=2,
-        num_safe_zones=0,
-        seed=42,
-        vision_radius=1.0,
-    )
-
+    env = make_simple_env(num_victims=0, num_trees=2)
     obs, _ = env.reset()
     agent = env.agents[0]
     agent_idx = 0
@@ -447,17 +409,9 @@ def test_tree_occludes_other_trees(make_env):
     ), "Second tree should be blocked by first tree"
 
 
-def test_relative_position_calculation(make_env):
+def test_relative_position_calculation(make_simple_env):
     """Test that relative positions in observations are calculated correctly."""
-    env = make_env(
-        num_rescuers=1,
-        num_victims=2,
-        num_trees=2,
-        num_safe_zones=4,
-        seed=42,
-        vision_radius=1.0,
-    )
-
+    env = make_simple_env(num_victims=2, num_trees=2, num_safe_zones=4)
     obs, _ = env.reset()
     agent = env.agents[0]
     agent_idx = 0
@@ -511,10 +465,9 @@ def test_relative_position_calculation(make_env):
         ), f"Safe zone {i} relative position incorrect. Got [{rel_x}, {rel_y}], expected {expected_rel}"
 
 
-def test_occlusion_tangent_case(make_env):
+def test_occlusion_tangent_case(env_simple):
     """Test occlusion when tree is tangent to the line of sight (edge case)."""
-    env = _make_simple_env(make_env)
-
+    env = env_simple
     _, _ = env.reset()
     agent_idx = 0
 
@@ -540,17 +493,9 @@ def test_occlusion_tangent_case(make_env):
     ), "Visibility check should return boolean"
 
 
-def test_occlusion_partial_overlap(make_env):
+def test_occlusion_partial_overlap(env_simple):
     """Test occlusion when tree partially overlaps the line of sight."""
-    env = make_env(
-        num_rescuers=1,
-        num_victims=1,
-        num_trees=1,
-        num_safe_zones=0,
-        seed=42,
-        vision_radius=1.0,
-    )
-
+    env = env_simple
     obs, _ = env.reset()
     agent_idx = 0
 
@@ -568,17 +513,9 @@ def test_occlusion_partial_overlap(make_env):
     assert not is_visible, "Tree with partial overlap should block vision"
 
 
-def test_occlusion_multiple_trees_chain(make_env):
+def test_occlusion_multiple_trees_chain(make_simple_env):
     """Test occlusion with multiple trees in a chain blocking vision."""
-    env = make_env(
-        num_rescuers=1,
-        num_victims=1,
-        num_trees=3,
-        num_safe_zones=0,
-        seed=42,
-        vision_radius=1.0,
-    )
-
+    env = make_simple_env(num_trees=3)
     obs, _ = env.reset()
     agent_idx = 0
 
@@ -596,17 +533,9 @@ def test_occlusion_multiple_trees_chain(make_env):
     ), "Chain of trees should block vision"
 
 
-def test_occlusion_tree_at_observer_position(make_env):
+def test_occlusion_tree_at_observer_position(env_simple):
     """Test occlusion when tree is at observer position (edge case)."""
-    env = make_env(
-        num_rescuers=1,
-        num_victims=1,
-        num_trees=1,
-        num_safe_zones=0,
-        seed=42,
-        vision_radius=1.0,
-    )
-
+    env = env_simple
     obs, _ = env.reset()
     agent_idx = 0
 
@@ -623,17 +552,9 @@ def test_occlusion_tree_at_observer_position(make_env):
     assert isinstance(is_visible, (bool, np.bool_)), "Should return boolean"
 
 
-def test_occlusion_tree_at_target_position(make_env):
+def test_occlusion_tree_at_target_position(env_simple):
     """Test occlusion when tree is at target position (edge case)."""
-    env = make_env(
-        num_rescuers=1,
-        num_victims=1,
-        num_trees=1,
-        num_safe_zones=0,
-        seed=42,
-        vision_radius=1.0,
-    )
-
+    env = env_simple
     obs, _ = env.reset()
     agent_idx = 0
 
@@ -650,17 +571,9 @@ def test_occlusion_tree_at_target_position(make_env):
     assert isinstance(is_visible, (bool, np.bool_)), "Should return boolean"
 
 
-def test_occlusion_diagonal_line_of_sight(make_env):
+def test_occlusion_diagonal_line_of_sight(env_simple):
     """Test occlusion with diagonal line of sight."""
-    env = make_env(
-        num_rescuers=1,
-        num_victims=1,
-        num_trees=1,
-        num_safe_zones=0,
-        seed=42,
-        vision_radius=1.0,
-    )
-
+    env = env_simple
     obs, _ = env.reset()
     agent_idx = 0
 
@@ -681,17 +594,9 @@ def test_occlusion_diagonal_line_of_sight(make_env):
     ), "Tree off diagonal line should not block"
 
 
-def test_occlusion_exclude_tree_parameter(make_env):
+def test_occlusion_exclude_tree_parameter(make_simple_env):
     """Test that exclude_tree_idx parameter works correctly."""
-    env = make_env(
-        num_rescuers=1,
-        num_victims=0,
-        num_trees=2,
-        num_safe_zones=0,
-        seed=42,
-        vision_radius=1.0,
-    )
-
+    env = make_simple_env(num_victims=0, num_trees=2)
     obs, _ = env.reset()
     agent_idx = 0
 
@@ -714,17 +619,9 @@ def test_occlusion_exclude_tree_parameter(make_env):
     ), "Tree1 should be visible when tree0 is excluded"
 
 
-def test_vision_radius_zero(make_env):
+def test_vision_radius_zero(make_simple_env):
     """Test behavior with zero vision radius."""
-    env = make_env(
-        num_rescuers=1,
-        num_victims=1,
-        num_trees=0,
-        num_safe_zones=0,
-        seed=42,
-        vision_radius=0.0,
-    )
-
+    env = make_simple_env(vision_radius=0.0, num_trees=0)
     obs, _ = env.reset()
     agent_idx = 0
 
@@ -737,17 +634,9 @@ def test_vision_radius_zero(make_env):
     ), "Zero vision radius should make everything invisible"
 
 
-def test_vision_radius_very_large(make_env):
+def test_vision_radius_very_large(make_simple_env):
     """Test behavior with very large vision radius."""
-    env = make_env(
-        num_rescuers=1,
-        num_victims=1,
-        num_trees=1,
-        num_safe_zones=0,
-        seed=42,
-        vision_radius=10.0,  # Very large
-    )
-
+    env = make_simple_env(vision_radius=10.0)
     obs, _ = env.reset()
     agent_idx = 0
 
@@ -761,17 +650,9 @@ def test_vision_radius_very_large(make_env):
     ), "Tree should block even with large vision radius"
 
 
-def test_occlusion_parallel_trees(make_env):
+def test_occlusion_parallel_trees(env_simple):
     """Test occlusion when trees are parallel to line of sight (should not block)."""
-    env = make_env(
-        num_rescuers=1,
-        num_victims=1,
-        num_trees=1,
-        num_safe_zones=0,
-        seed=42,
-        vision_radius=1.0,
-    )
-
+    env = env_simple
     obs, _ = env.reset()
     agent_idx = 0
 
@@ -790,17 +671,9 @@ def test_occlusion_parallel_trees(make_env):
     assert is_visible, "Tree parallel to line should not block if offset enough"
 
 
-def test_occlusion_observation_consistency(make_env):
+def test_occlusion_observation_consistency(make_simple_env):
     """Test that observation masking is consistent with _is_visible."""
-    env = make_env(
-        num_rescuers=1,
-        num_victims=2,
-        num_trees=2,
-        num_safe_zones=0,
-        seed=42,
-        vision_radius=1.0,
-    )
-
+    env = make_simple_env(num_victims=2, num_trees=2)
     obs, _ = env.reset()
     agent = env.agents[0]
     agent_idx = 0
@@ -846,17 +719,9 @@ def test_occlusion_observation_consistency(make_env):
         ), "Blocked victim should be masked"
 
 
-def test_occlusion_tree_self_visibility(make_env):
+def test_occlusion_tree_self_visibility(make_simple_env):
     """Test that trees can be visible to themselves (using exclude_tree_idx)."""
-    env = make_env(
-        num_rescuers=1,
-        num_victims=0,
-        num_trees=2,
-        num_safe_zones=0,
-        seed=42,
-        vision_radius=1.0,
-    )
-
+    env = make_simple_env(num_victims=0, num_trees=2)
     obs, _ = env.reset()
     agent = env.agents[0]
     agent_idx = 0
@@ -887,17 +752,9 @@ def test_occlusion_tree_self_visibility(make_env):
     ), "Tree should be visible when excluding itself"
 
 
-def test_occlusion_edge_case_very_close_tree(make_env):
+def test_occlusion_edge_case_very_close_tree(env_simple):
     """Test occlusion when tree is very close to observer."""
-    env = make_env(
-        num_rescuers=1,
-        num_victims=1,
-        num_trees=1,
-        num_safe_zones=0,
-        seed=42,
-        vision_radius=1.0,
-    )
-
+    env = env_simple
     obs, _ = env.reset()
     agent_idx = 0
 
@@ -914,17 +771,9 @@ def test_occlusion_edge_case_very_close_tree(make_env):
     assert not is_visible, "Tree very close to observer should block vision"
 
 
-def test_occlusion_edge_case_very_close_target(make_env):
+def test_occlusion_edge_case_very_close_target(env_simple):
     """Test occlusion when tree is very close to target."""
-    env = make_env(
-        num_rescuers=1,
-        num_victims=1,
-        num_trees=1,
-        num_safe_zones=0,
-        seed=42,
-        vision_radius=1.0,
-    )
-
+    env = env_simple
     obs, _ = env.reset()
     agent_idx = 0
 
