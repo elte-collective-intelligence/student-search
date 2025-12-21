@@ -147,7 +147,8 @@ def train(
                 try:
                     subdata = subdata.to(device)
                 except Exception:
-                    # Fallback: if `.to(device)` is unavailable, move key tensors manually
+                    # Fallback: if `.to(device)` is unavailable, assume `subdata` is already on a compatible
+                    # device or that `loss_module` handles device placement internally, so we skip adjustment.
                     pass
                 loss_vals = loss_module(subdata)
 
