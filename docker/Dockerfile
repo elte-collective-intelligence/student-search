@@ -1,9 +1,9 @@
 FROM python:3.13-slim
 
 WORKDIR /app
-COPY requirements.txt /app
+COPY pyproject.toml /app
 
-RUN pip install --no-cache-dir -r requirements.txt --break-system-packages
+RUN pip install --no-cache-dir --break-system-packages .
 
 COPY . /app
 
