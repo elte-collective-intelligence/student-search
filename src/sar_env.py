@@ -33,7 +33,10 @@ class SearchAndRescueEnv(ParallelEnv):
         self.max_steps = max_cycles
         self.is_continuous = continuous_actions
         self.randomize_safe_zones = randomize_safe_zones
-        self.seed = seed
+
+        # Initialize random number generator
+        self._seed = seed
+        self.np_random = np.random.RandomState(seed)
 
         # Parameters
         self.world_size = 2.0  # [-1, 1] range
@@ -97,62 +100,42 @@ class SearchAndRescueEnv(ParallelEnv):
         self.screen = None
         self.clock = None
 
-        # Metrics state (reset each episode)
-        self._cell_size = 0.05
-        self._episode_counter = 0
-        self._visited_cells = []
-        self._collision_events = 0
-        self._completed_episode_metrics = []
-
-    def _reset_metrics(self) -> None:
-        """Reset per-episode metric trackers."""
-        self._visited_cells = [set() for _ in range(self.num_rescuers)]
-        self._collision_events = 0
-
-    def _hash_pos(self, pos: np.ndarray) -> tuple[int, int]:
-        return tuple(np.floor(pos / self._cell_size).astype(int))
-
-    def pop_episode_metrics(self) -> list[dict]:
-        """Return and clear metrics for episodes that completed since last call."""
-        metrics = self._completed_episode_metrics
-        self._completed_episode_metrics = []
-        return metrics
-
     def reset(self, seed: Optional[int] = None, options: Optional[dict] = None):
         self.steps = 0
+
+        # Handle seeding
         if seed is not None:
-            np.random.seed(seed)
+            self._seed = seed
+            self.np_random = np.random.RandomState(seed)
 
         # Reset Agents list (required by PettingZoo API)
         self.agents = self.possible_agents[:]
 
-        # Metrics state (reset each episode)
-        self._episode_counter += 1
-        self._reset_metrics()
-
-        # Positions: Rescuers, Victims, Trees, SafeZones
-        self.rescuer_pos = np.random.uniform(-0.8, 0.8, (self.num_rescuers, 2))
+        # Positions: Rescuers, Victims, Trees, SafeZones (using self.np_random)
+        self.rescuer_pos = self.np_random.uniform(-0.8, 0.8, (self.num_rescuers, 2))
         self.rescuer_vel = np.zeros((self.num_rescuers, 2))
 
-        self.victim_pos = np.random.uniform(-0.8, 0.8, (self.num_victims, 2))
+        self.victim_pos = self.np_random.uniform(-0.8, 0.8, (self.num_victims, 2))
         self.victim_vel = np.zeros((self.num_victims, 2))
         self.victim_saved = np.zeros(self.num_victims, dtype=bool)
 
         # Track which agent each victim is committed to (-1 = none)
         self.victim_assignments = np.full(self.num_victims, -1, dtype=int)
 
-        self.tree_pos = np.random.uniform(-0.8, 0.8, (self.num_trees, 2))
+        self.tree_pos = self.np_random.uniform(-0.8, 0.8, (self.num_trees, 2))
 
         # Safe zones: randomized or at fixed corners
         if self.randomize_safe_zones:
             # Randomize positions within the world bounds
             # Keep them near edges for better gameplay
-            self.safezone_pos = np.random.uniform(-0.95, 0.95, (self.num_safe_zones, 2))
+            self.safezone_pos = self.np_random.uniform(
+                -0.95, 0.95, (self.num_safe_zones, 2)
+            )
 
-            # Optionally shuffle types to randomize which zone accepts which victim type
+            # Shuffle types to randomize which zone accepts which victim type
             # Keep types as 0,1,2,3 but in random order
             self.safe_zone_types = list(range(self.num_safe_zones))
-            np.random.shuffle(self.safe_zone_types)
+            self.np_random.shuffle(self.safe_zone_types)
         else:
             # Fixed positions at corners (default behavior)
             self.safezone_pos = np.array(
@@ -312,8 +295,6 @@ class SearchAndRescueEnv(ParallelEnv):
                 dist = np.linalg.norm(to_tree)
                 min_dist = self.agent_size + self.tree_radius
                 if dist < min_dist:
-                    # Track collision metric
-                    self._collision_events += 1
                     # Tree collision penalty
                     rewards[agent] -= 1
                     # Compute penetration depth and normal
@@ -340,8 +321,6 @@ class SearchAndRescueEnv(ParallelEnv):
                 dist = np.linalg.norm(to_other)
 
                 if dist < agent_repulsion_radius and dist > 1e-6:
-                    # Track collision between agents (count once per pair)
-                    self._collision_events += 1
                     # Apply soft repulsion force inversely proportional to distance
                     repulsion_force = (
                         repulsion_strength * (agent_repulsion_radius - dist) / dist
@@ -412,8 +391,8 @@ class SearchAndRescueEnv(ParallelEnv):
                     self.victim_vel[v_i] * 0.8 + direction * follow_force
                 )
             else:
-                # Simple Brownian motion
-                noise = np.random.randn(2) * 0.0075
+                # Simple Brownian motion (using seeded RNG)
+                noise = self.np_random.randn(2) * 0.0075
                 self.victim_vel[v_i] = self.victim_vel[v_i] * 0.8 + noise
 
             self.victim_pos[v_i] += self.victim_vel[v_i]
@@ -421,10 +400,6 @@ class SearchAndRescueEnv(ParallelEnv):
 
         # 3. Logic: Rescues & Rewards
         saved_count = self._compute_rewards(rewards)
-
-        # Track coverage each step (after physics updates)
-        for i, agent in enumerate(self.agents):
-            self._visited_cells[i].add(self._hash_pos(self.rescuer_pos[i].copy()))
 
         self.steps += 1
 
@@ -435,25 +410,6 @@ class SearchAndRescueEnv(ParallelEnv):
         elif self.steps >= self.max_steps:
             truncations = {a: True for a in self.agents}
             self.agents = []
-
-        if not self.agents:
-            # Episode ended; aggregate metrics
-            rescues_pct = (
-                100.0
-                * float(np.count_nonzero(self.victim_saved))
-                / max(1, self.num_victims)
-            )
-            coverage_cells = len(set().union(*self._visited_cells))
-            collisions = self._collision_events
-            self._completed_episode_metrics.append(
-                {
-                    "episode": self._episode_counter,
-                    "rescues_pct": rescues_pct,
-                    "collisions": collisions,
-                    "coverage_cells": coverage_cells,
-                }
-            )
-            self._reset_metrics()
 
         return self._get_obs(), rewards, terminations, truncations, infos
 
@@ -541,6 +497,13 @@ class SearchAndRescueEnv(ParallelEnv):
         if self.screen:
             pygame.quit()
 
+    def _get_matching_zone_idx(self, victim_type: int) -> Optional[int]:
+        """Find the safe zone index that accepts the given victim type."""
+        for zone_idx, zone_type in enumerate(self.safe_zone_types):
+            if zone_type == victim_type:
+                return zone_idx
+        return None
+
     def _compute_agent_victim_dists(self) -> list[float]:
         """Compute min distance from each agent to nearest unsaved victim."""
         dists = []
@@ -578,11 +541,15 @@ class SearchAndRescueEnv(ParallelEnv):
                 continue
 
             v_pos = self.victim_pos[v_i]
-            v_type_idx = self.victim_types[v_i]
+            v_type = self.victim_types[v_i]
 
-            # Find pos of safe zone with matching type
-            target_zone_pos = self.safezone_pos[v_type_idx]
+            # Find safe zone with matching type (not index!)
+            target_zone_idx = self._get_matching_zone_idx(v_type)
+            if target_zone_idx is None:
+                # Should not happen if num_safe_zones >= max victim types
+                continue
 
+            target_zone_pos = self.safezone_pos[target_zone_idx]
             dist_to_zone = np.linalg.norm(v_pos - target_zone_pos)
 
             # Victim got saved
@@ -623,11 +590,17 @@ class SearchAndRescueEnv(ParallelEnv):
                 # Only reward the assigned agent (stronger signal for credit assignment)
                 if assigned_agent_idx != -1 and assigned_agent_idx < len(self.agents):
                     agent = self.agents[assigned_agent_idx]
-                    dist_to_zone = np.linalg.norm(
-                        self.victim_pos[v_i] - self.safezone_pos[self.victim_types[v_i]]
-                    )
-                    # Reward proportional to inverse distance (closer to goal = higher reward)
-                    rewards[agent] += 1.0 / (dist_to_zone + 1e-6)
+
+                    # Find the correct safe zone by matching type
+                    v_type = self.victim_types[v_i]
+                    target_zone_idx = self._get_matching_zone_idx(v_type)
+
+                    if target_zone_idx is not None:
+                        dist_to_zone = np.linalg.norm(
+                            self.victim_pos[v_i] - self.safezone_pos[target_zone_idx]
+                        )
+                        # Reward proportional to inverse distance (closer to goal = higher reward)
+                        rewards[agent] += 1.0 / (dist_to_zone + 1e-6)
 
         # Boundary penalties
         for i, agent in enumerate(self.agents):
