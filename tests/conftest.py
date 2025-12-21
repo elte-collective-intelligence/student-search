@@ -224,6 +224,12 @@ def place_victim(env: SearchAndRescueEnv, victim_idx: int, pos: tuple[float, flo
 
 def place_tree(env: SearchAndRescueEnv, tree_idx: int, pos: tuple[float, float]):
     """Place a tree at a specific position."""
+    # Validate tree index to provide clearer failures in tests.
+    num_trees = getattr(env, "num_trees", len(env.tree_pos))
+    if not isinstance(tree_idx, int) or not (0 <= tree_idx < num_trees):
+        raise ValueError(
+            f"tree_idx {tree_idx} is out of bounds for environment with {num_trees} trees."
+        )
     env.tree_pos[tree_idx] = np.array(pos, dtype=np.float64)
 
 
