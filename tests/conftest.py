@@ -138,7 +138,14 @@ def get_obs_slices(env: SearchAndRescueEnv) -> dict[str, slice]:
 
 def get_tree_obs(obs_vec: np.ndarray, slices: dict, tree_idx: int) -> np.ndarray:
     """Extract observation for a specific tree."""
-    start = slices["trees"].start + tree_idx * 2
+    tree_slice = slices["trees"]
+    num_trees = (tree_slice.stop - tree_slice.start) // 2
+    if tree_idx < 0 or tree_idx >= num_trees:
+        raise IndexError(
+            f"tree_idx {tree_idx} is out of bounds for {num_trees} trees "
+            f"(valid indices: 0 to {num_trees - 1})"
+        )
+    start = tree_slice.start + tree_idx * 2
     return obs_vec[start : start + 2]  # noqa: E203
 
 
