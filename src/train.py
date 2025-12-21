@@ -146,7 +146,7 @@ def train(
                 # Ensure sampled minibatch tensors are on the training device
                 try:
                     subdata = subdata.to(device)
-                except Exception:
+                except AttributeError:
                     # Fallback: if `.to(device)` is unavailable, assume `subdata` is already on a compatible
                     # device or that `loss_module` handles device placement internally, so we skip adjustment.
                     pass
