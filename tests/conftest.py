@@ -198,6 +198,11 @@ def place_agent(env: SearchAndRescueEnv, agent_idx: int, pos: tuple[float, float
 
 def place_victim(env: SearchAndRescueEnv, victim_idx: int, pos: tuple[float, float]):
     """Place a victim at a specific position."""
+    num_victims = len(env.victim_pos)
+    if victim_idx < 0 or victim_idx >= num_victims:
+        raise ValueError(
+            f"victim_idx {victim_idx} is out of range for {num_victims} victims"
+        )
     env.victim_pos[victim_idx] = np.array(pos, dtype=np.float64)
 
 
