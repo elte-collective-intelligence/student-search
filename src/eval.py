@@ -1,5 +1,7 @@
 from time import sleep
 
+import numpy as np
+
 from src.sar_env import make_env
 from src.models import make_policy
 from src.logger import RunContext, TensorboardLogger
@@ -203,18 +205,21 @@ def evaluate(
             f"Episode {i + 1} finished in {step_count} steps. Total reward: {episode_reward:.2f}"
         )
 
+    mean_reward = 0
+    mean_steps = 0
+
     # Log summary statistics
     if episode_rewards:
-        mean_reward = sum(episode_rewards) / len(episode_rewards)
-        mean_steps = sum(episode_steps) / len(episode_steps)
+        mean_reward = float(np.mean(episode_rewards))
+        mean_steps = float(np.mean(episode_steps))
         logger.log_scalar("eval/mean_episode_reward", mean_reward, step=num_games)
         logger.log_scalar("eval/mean_episode_steps", mean_steps, step=num_games)
         logger.log_scalar("eval/total_episodes", num_games, step=num_games)
 
     if rescues_pct_log:
-        mean_rescues_pct = sum(rescues_pct_log) / len(rescues_pct_log)
-        mean_collisions = sum(collisions_log) / len(collisions_log)
-        mean_coverage = sum(coverage_log) / len(coverage_log)
+        mean_rescues_pct = float(np.mean(rescues_pct_log))
+        mean_collisions = float(np.mean(collisions_log))
+        mean_coverage = float(np.mean(coverage_log))
         logger.log_dict(
             "eval/summary",
             {

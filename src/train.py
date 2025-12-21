@@ -1,5 +1,6 @@
 import time
 
+import numpy as np
 import torch
 from torchrl.envs import check_env_specs
 from torchrl.collectors import SyncDataCollector
@@ -214,9 +215,9 @@ def train(
             metrics = metrics_env.pop_episode_metrics()
             if metrics:
                 # Aggregate across episodes that finished in this batch
-                rescues_pct = sum(m["rescues_pct"] for m in metrics) / len(metrics)
-                collisions = sum(m["collisions"] for m in metrics) / len(metrics)
-                coverage = sum(m["coverage_cells"] for m in metrics) / len(metrics)
+                rescues_pct = np.mean([m["rescues_pct"] for m in metrics])
+                collisions = np.mean([m["collisions"] for m in metrics])
+                coverage = np.mean([m["coverage_cells"] for m in metrics])
                 logger.log_dict(
                     "train/episode_metrics",
                     {
