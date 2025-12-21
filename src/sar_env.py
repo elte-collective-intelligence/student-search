@@ -76,12 +76,14 @@ class SearchAndRescueEnv(ParallelEnv):
 
         # Observation Space Calculation (Partial Observability with Vision Masking)
         # [Self_Vel(2), Self_Pos(2), Agent_ID(num_rescuers),
-        #  SafeZones(4 * 4: rel_x, rel_y, type_idx, visible) - with explicit visibility bit,
+        #  SafeZones(4 * 4: rel_x, rel_y, type_idx, visible) - always visible (static landmarks),
         #  Trees(N * 3: rel_x, rel_y, visible) - with explicit visibility bit,
         #  Victims(N * 4: rel_x, rel_y, type_idx, visible) - with explicit visibility bit]
-        # Note: All spatial entities use visibility masking based on vision_radius and occlusion
+        # Note: Trees and victims use visibility masking based on vision_radius and occlusion
+        # Note: Safe zones are always visible as they are static map objectives
         # Note: Other rescuers removed from observation to focus learning on task
-        # Note: Observations are bounded - rel positions in [-2,2], types in [0, num_types-1], visible in [0,1]
+        # Note: Observations are bounded - rel positions in [-3,3], types in [0, num_types-1], visible in [0,1]
+        # Note: True rel positions and types are ALWAYS provided; visibility bit gates usage (no sentinel values)
 
         self.obs_dim = (
             4
@@ -182,6 +184,7 @@ class SearchAndRescueEnv(ParallelEnv):
         self.victim_pos = self.np_random.uniform(-0.8, 0.8, (self.num_victims, 2))
         self.victim_vel = np.zeros((self.num_victims, 2))
         self.victim_saved = np.zeros(self.num_victims, dtype=bool)
+        self.victim_last_switch = np.full(self.num_victims, -10_000, dtype=int)
 
         # Track which agent each victim is committed to (-1 = none)
         self.victim_assignments = np.full(self.num_victims, -1, dtype=int)
@@ -291,44 +294,39 @@ class SearchAndRescueEnv(ParallelEnv):
             agent_id_onehot[i] = 1.0
             obs_vec.extend(agent_id_onehot)
 
-            # 3. Safe Zones (with explicit visibility bit instead of sentinel values)
+            # 3. Safe Zones (always visible - static landmarks, no visibility gating needed)
             for sz_i in range(self.num_safe_zones):
-                if self._is_visible(
-                    my_pos, self.safezone_pos[sz_i], self.safe_zone_radius
-                ):
-                    rel_pos = self.safezone_pos[sz_i] - my_pos
-                    # [rel_x, rel_y, type_idx, visible=1]
-                    obs_vec.extend(
-                        [rel_pos[0], rel_pos[1], float(self.safe_zone_types[sz_i]), 1.0]
-                    )
-                else:
-                    # Not visible: set valid bounded values with visible=0
-                    obs_vec.extend([0.0, 0.0, 0.0, 0.0])
+                rel_pos = self.safezone_pos[sz_i] - my_pos
+                type_idx = float(self.safe_zone_types[sz_i])
+                # Safe zones are always visible=1 (static map objectives)
+                obs_vec.extend([rel_pos[0], rel_pos[1], type_idx, 1.0])
 
-            # 4. Trees (with explicit visibility bit)
+            # 4. Trees (always provide true rel_pos, visibility bit gates usage)
             for t_i in range(self.num_trees):
-                if self._is_visible(
-                    my_pos, self.tree_pos[t_i], self.tree_radius, exclude_tree_idx=t_i
-                ):
-                    rel_pos = self.tree_pos[t_i] - my_pos
-                    # [rel_x, rel_y, visible=1]
-                    obs_vec.extend([rel_pos[0], rel_pos[1], 1.0])
-                else:
-                    # Not visible: set valid bounded values with visible=0
-                    obs_vec.extend([0.0, 0.0, 0.0])
+                rel_pos = self.tree_pos[t_i] - my_pos
+                visible = float(
+                    self._is_visible(
+                        my_pos,
+                        self.tree_pos[t_i],
+                        self.tree_radius,
+                        exclude_tree_idx=t_i,
+                    )
+                )
+                rel_pos *= visible
+                # [rel_x, rel_y, visible] - true position always provided
+                obs_vec.extend([rel_pos[0], rel_pos[1], visible])
 
-            # 5. Victims (with explicit visibility bit)
+            # 5. Victims (always provide true rel_pos and type, visibility bit gates usage)
             for v_i in range(self.num_victims):
-                # If visible and not saved
-                if not self.victim_saved[v_i] and self._is_visible(
-                    my_pos, self.victim_pos[v_i], self.agent_size
-                ):
-                    rel = self.victim_pos[v_i] - my_pos
-                    # [rel_x, rel_y, type_idx, visible=1]
-                    obs_vec.extend([rel[0], rel[1], float(self.victim_types[v_i]), 1.0])
-                else:
-                    # Not visible or saved: set valid bounded values with visible=0
-                    obs_vec.extend([0.0, 0.0, 0.0, 0.0])
+                rel_pos = self.victim_pos[v_i] - my_pos
+                # Visible if not saved AND within vision range AND not occluded
+                visible = float(
+                    not self.victim_saved[v_i]
+                    and self._is_visible(my_pos, self.victim_pos[v_i], self.agent_size)
+                )
+                type_idx = float(self.victim_types[v_i]) * visible
+                # [rel_x, rel_y, type_idx, visible] - true values always provided
+                obs_vec.extend([rel_pos[0], rel_pos[1], type_idx, visible])
 
             # Other rescuers removed from observation to focus learning on task
 
@@ -453,6 +451,7 @@ class SearchAndRescueEnv(ParallelEnv):
                 # Not assigned - assign if agent is close enough
                 if min_dist < self.follow_radius:
                     self.victim_assignments[v_i] = closest_agent_idx
+                    self.victim_last_switch[v_i] = self.steps
                     current_assignment = closest_agent_idx
             else:
                 # Already assigned - check if we should switch or release
@@ -470,12 +469,18 @@ class SearchAndRescueEnv(ParallelEnv):
                         self.victim_assignments[v_i] = closest_agent_idx
                         current_assignment = closest_agent_idx
                 # Switch only if another agent is significantly closer (0.6x distance)
-                elif (
-                    closest_agent_idx != current_assignment
-                    and min_dist < dist_to_assigned * 0.6
-                ):
-                    self.victim_assignments[v_i] = closest_agent_idx
-                    current_assignment = closest_agent_idx
+                else:
+                    cooldown = 10  # steps
+                    can_switch = (self.steps - self.victim_last_switch[v_i]) >= cooldown
+                    if (
+                        can_switch
+                        and closest_agent_idx != current_assignment
+                        and min_dist
+                        < dist_to_assigned * 0.3  # stronger hysteresis than 0.6
+                    ):
+                        self.victim_assignments[v_i] = closest_agent_idx
+                        self.victim_last_switch[v_i] = self.steps
+                        current_assignment = closest_agent_idx
 
             # Movement based on assignment
             if current_assignment != -1:
@@ -484,7 +489,7 @@ class SearchAndRescueEnv(ParallelEnv):
                 direction = (assigned_pos - self.victim_pos[v_i]) / (
                     np.linalg.norm(assigned_pos - self.victim_pos[v_i]) + 1e-6
                 )
-                follow_force = 0.02
+                follow_force = 0.03
                 self.victim_vel[v_i] = (
                     self.victim_vel[v_i] * 0.8 + direction * follow_force
                 )
@@ -641,15 +646,22 @@ class SearchAndRescueEnv(ParallelEnv):
     def _compute_rewards(self, rewards) -> int:
         # Delta-based distance shaping (reward for getting closer, penalty for moving away)
         current_dists = self._compute_agent_victim_dists()
-        for i, agent in enumerate(self.agents):
-            if (
-                hasattr(self, "prev_agent_victim_dists")
-                and self.prev_agent_victim_dists[i] > 0
-            ):
-                delta = (
-                    self.prev_agent_victim_dists[i] - current_dists[i]
-                )  # positive = got closer
-                rewards[agent] += delta * 0.1
+        for a_i, agent in enumerate(self.agents):
+            # find a victim currently assigned to this agent
+            assigned_vs = np.where(self.victim_assignments == a_i)[0]
+            if assigned_vs.size == 0:
+                continue  # no assignment -> no shaping
+
+            v_i = int(assigned_vs[0])  # simplest: pick first
+            prev = getattr(self, "prev_assigned_dist", np.full(self.num_rescuers, 0.0))
+            dist = np.linalg.norm(self.rescuer_pos[a_i] - self.victim_pos[v_i])
+
+            # potential-based: reward getting closer to *your* victim
+            if prev[a_i] > 0:
+                rewards[agent] += (prev[a_i] - dist) * 0.3
+
+            prev[a_i] = dist
+            self.prev_assigned_dist = prev
         self.prev_agent_victim_dists = current_dists
 
         # Check safe zones
@@ -716,8 +728,8 @@ class SearchAndRescueEnv(ParallelEnv):
                     dist = np.linalg.norm(self.rescuer_pos[i] - self.rescuer_pos[j])
                     if dist < 0.15:  # Agents are overlapping/colliding
                         # Stronger penalty to discourage clustering (increased from -1.0)
-                        rewards[self.agents[i]] -= 5.0
-                        rewards[self.agents[j]] -= 5.0
+                        rewards[self.agents[i]] -= 3.0
+                        rewards[self.agents[j]] -= 3.0
 
         return saved_count
 
