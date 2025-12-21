@@ -94,7 +94,6 @@ class TestBasicOcclusion:
     def test_tree_behind_target_no_block(self, env_simple):
         """Trees behind target don't block vision."""
         env = env_simple
-        env.reset()
 
         place_agent(env, 0, (-0.5, 0.0))
         place_victim(env, 0, (0.5, 0.0))
@@ -111,7 +110,6 @@ class TestBasicOcclusion:
     def test_tree_between_blocks(self, env_simple):
         """Trees between observer and target block vision."""
         env = env_simple
-        env.reset()
 
         place_agent(env, 0, (-0.5, 0.0))
         place_victim(env, 0, (0.5, 0.0))
@@ -497,7 +495,6 @@ class TestEdgeCases:
     def test_tangent_case(self, env_simple):
         """Occlusion when tree is tangent to line of sight."""
         env = env_simple
-        env.reset()
 
         place_agent(env, 0, (-0.5, 0.0))
         place_victim(env, 0, (0.5, 0.0))
@@ -511,7 +508,6 @@ class TestEdgeCases:
     def test_partial_overlap(self, env_simple):
         """Tree partially overlapping line of sight blocks vision."""
         env = env_simple
-        env.reset()
 
         place_agent(env, 0, (-0.5, 0.0))
         place_victim(env, 0, (0.5, 0.0))
@@ -528,7 +524,6 @@ class TestEdgeCases:
     def test_tree_at_observer_position(self, env_simple):
         """Tree at observer position handled gracefully."""
         env = env_simple
-        env.reset()
 
         place_agent(env, 0, (0.0, 0.0))
         place_victim(env, 0, (0.5, 0.0))
@@ -542,7 +537,6 @@ class TestEdgeCases:
     def test_tree_at_target_position(self, env_simple):
         """Tree at target position handled gracefully."""
         env = env_simple
-        env.reset()
 
         place_agent(env, 0, (-0.5, 0.0))
         place_victim(env, 0, (0.5, 0.0))
@@ -556,7 +550,6 @@ class TestEdgeCases:
     def test_diagonal_line_of_sight(self, env_simple):
         """Occlusion with diagonal line of sight."""
         env = env_simple
-        env.reset()
 
         place_agent(env, 0, (-0.3, -0.3))
         place_victim(env, 0, (0.3, 0.3))
@@ -641,7 +634,6 @@ class TestEdgeCases:
     def test_very_close_tree_to_observer(self, env_simple):
         """Tree very close to observer blocks vision."""
         env = env_simple
-        env.reset()
 
         place_agent(env, 0, (0.0, 0.0))
         place_victim(env, 0, (0.5, 0.0))
@@ -658,7 +650,6 @@ class TestEdgeCases:
     def test_very_close_tree_to_target(self, env_simple):
         """Tree very close to target blocks vision."""
         env = env_simple
-        env.reset()
 
         place_agent(env, 0, (-0.5, 0.0))
         place_victim(env, 0, (0.5, 0.0))
@@ -675,7 +666,6 @@ class TestEdgeCases:
     def test_parallel_trees_no_block(self, env_simple):
         """Trees parallel to line of sight (offset) don't block."""
         env = env_simple
-        env.reset()
 
         place_agent(env, 0, (-0.5, 0.0))
         place_victim(env, 0, (0.5, 0.0))
