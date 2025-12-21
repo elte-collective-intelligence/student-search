@@ -96,7 +96,14 @@ def evaluate(
 
     # 5. Create and Load Policy
     num_agents = env.action_spec["agents", "action"].shape[0]
-    policy = make_policy(env, num_rescuers=num_agents, device=device)
+
+    # Determine if we're using discrete or continuous actions
+    is_discrete = not env.base_env.is_continuous
+    print(f"Action type: {'Discrete' if is_discrete else 'Continuous'}")
+
+    policy = make_policy(
+        env, num_rescuers=num_agents, device=device, discrete=is_discrete
+    )
 
     # Handle different saving formats
     if isinstance(checkpoint, dict) and "policy_state_dict" in checkpoint:

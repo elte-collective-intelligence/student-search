@@ -21,6 +21,7 @@ class SearchAndRescueEnv(ParallelEnv):
         max_cycles: int = 200,
         continuous_actions: bool = False,
         vision_radius: float = 0.5,
+        randomize_safe_zones: bool = False,
         seed: Optional[int] = None,
         render_mode: Optional[str] = None,
     ):
@@ -31,6 +32,7 @@ class SearchAndRescueEnv(ParallelEnv):
         self.render_mode = render_mode
         self.max_steps = max_cycles
         self.is_continuous = continuous_actions
+        self.randomize_safe_zones = randomize_safe_zones
         self.seed = seed
 
         # Parameters
@@ -47,8 +49,8 @@ class SearchAndRescueEnv(ParallelEnv):
         self.victim_names = [f"victim_{i}" for i in range(num_victims)]
 
         # Assign types cyclically
-        self.victim_types = [i % 4 for i in range(num_victims)]
-        self.safe_zone_types = [0, 1, 2, 3]  # TL, TR, BL, BR
+        self.victim_types = [i % self.num_safe_zones for i in range(num_victims)]
+        # safe_zone_types will be set in reset() based on randomize_safe_zones
 
         # Colors for rendering
         self.type_colors = {
@@ -58,17 +60,23 @@ class SearchAndRescueEnv(ParallelEnv):
             3: (255, 255, 50),  # Yellow (D)
         }
 
-        # Action Space: Continuous acceleration (dx, dy)
-        self.action_spaces = {
-            agent: spaces.Box(low=-1, high=1, shape=(2,), dtype=np.float32)
-            for agent in self.agents
-        }
+        # Action Space: Either Discrete or Continuous
+        if self.is_continuous:
+            # Continuous acceleration (dx, dy)
+            self.action_spaces = {
+                agent: spaces.Box(low=-1, high=1, shape=(2,), dtype=np.float32)
+                for agent in self.agents
+            }
+        else:
+            # Discrete actions: 0=noop, 1=up, 2=down, 3=left, 4=right
+            self.action_spaces = {agent: spaces.Discrete(5) for agent in self.agents}
 
-        # Observation Space Calculation
+        # Observation Space Calculation (Partial Observability with Vision Masking)
         # [Self_Vel(2), Self_Pos(2), Agent_ID(num_rescuers),
-        #  SafeZones(4 * 3: rel_x, rel_y, type_idx),
-        #  Trees(N * 2: rel_x, rel_y),
-        #  Victims(N * 3: rel_x, rel_y, type_idx)]
+        #  SafeZones(4 * 3: rel_x, rel_y, type_idx) - masked if occluded/far,
+        #  Trees(N * 2: rel_x, rel_y) - masked if occluded/far,
+        #  Victims(N * 3: rel_x, rel_y, type_idx) - masked if occluded/far/saved]
+        # Note: All spatial entities use visibility masking based on vision_radius and occlusion
         # Note: Other rescuers removed from observation to focus learning on task
 
         self.obs_dim = (
@@ -135,10 +143,23 @@ class SearchAndRescueEnv(ParallelEnv):
 
         self.tree_pos = np.random.uniform(-0.8, 0.8, (self.num_trees, 2))
 
-        # Safe zones at corners
-        self.safezone_pos = np.array(
-            [[-0.9, 0.9], [0.9, 0.9], [-0.9, -0.9], [0.9, -0.9]]
-        )
+        # Safe zones: randomized or at fixed corners
+        if self.randomize_safe_zones:
+            # Randomize positions within the world bounds
+            # Keep them near edges for better gameplay
+            self.safezone_pos = np.random.uniform(-0.95, 0.95, (self.num_safe_zones, 2))
+
+            # Optionally shuffle types to randomize which zone accepts which victim type
+            # Keep types as 0,1,2,3 but in random order
+            self.safe_zone_types = list(range(self.num_safe_zones))
+            np.random.shuffle(self.safe_zone_types)
+        else:
+            # Fixed positions at corners (default behavior)
+            self.safezone_pos = np.array(
+                [[-0.9, 0.9], [0.9, 0.9], [-0.9, -0.9], [0.9, -0.9]]
+            )
+            # Types stay in original order
+            self.safe_zone_types = [0, 1, 2, 3]
 
         # Track previous distances for delta-based shaping
         self.prev_agent_victim_dists = self._compute_agent_victim_dists()
@@ -197,13 +218,19 @@ class SearchAndRescueEnv(ParallelEnv):
             agent_id_onehot[i] = 1.0
             obs_vec.extend(agent_id_onehot)
 
-            # 3. Safe Zones (Global knowledge assumed for static zones)
+            # 3. Safe Zones (with visibility masking)
             for sz_i in range(self.num_safe_zones):
-                rel_pos = self.safezone_pos[sz_i] - my_pos
-                # We append the numeric type (0-3) so the network knows which zone is which
-                obs_vec.extend(
-                    [rel_pos[0], rel_pos[1], float(self.safe_zone_types[sz_i])]
-                )
+                if self._is_visible(
+                    my_pos, self.safezone_pos[sz_i], self.safe_zone_radius
+                ):
+                    rel_pos = self.safezone_pos[sz_i] - my_pos
+                    # We append the numeric type (0-3) so the network knows which zone is which
+                    obs_vec.extend(
+                        [rel_pos[0], rel_pos[1], float(self.safe_zone_types[sz_i])]
+                    )
+                else:
+                    # Masked: not visible due to distance or occlusion
+                    obs_vec.extend([0.0, 0.0, -1.0])
 
             # 4. Trees
             for t_i in range(self.num_trees):
@@ -243,6 +270,22 @@ class SearchAndRescueEnv(ParallelEnv):
                 continue
 
             action = actions[agent]
+
+            # Convert discrete action to continuous if needed
+            if not self.is_continuous:
+                # Discrete actions: 0=noop, 1=up, 2=down, 3=left, 4=right
+                if isinstance(action, np.ndarray):
+                    action = int(action)
+
+                action_map = {
+                    0: np.array([0.0, 0.0]),  # noop
+                    1: np.array([0.0, 1.0]),  # up
+                    2: np.array([0.0, -1.0]),  # down
+                    3: np.array([-1.0, 0.0]),  # left
+                    4: np.array([1.0, 0.0]),  # right
+                }
+                action = action_map.get(action, np.array([0.0, 0.0]))
+
             # Physics
             self.rescuer_vel[i] = self.rescuer_vel[i] * 0.8 + action * 0.1
             speed = np.linalg.norm(self.rescuer_vel[i])

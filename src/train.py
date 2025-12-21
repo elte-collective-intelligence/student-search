@@ -56,8 +56,11 @@ def train(
 
     # 1. Policy Network (Actor) - Decentralized
     # Input: ("agents", "observation") -> [Batch, n_agents, obs_dim]
-    # Output: ("agents", "loc"), ("agents", "scale")
-    policy = make_policy(env, num_rescuers=num_agents, device=device)
+    # Output: ("agents", "loc"), ("agents", "scale") for continuous OR ("agents", "logits") for discrete
+    is_discrete = not env.base_env.is_continuous
+    policy = make_policy(
+        env, num_rescuers=num_agents, device=device, discrete=is_discrete
+    )
 
     # 2. Value Network (Critic) - Centralized
     # Input: All observations concatenated
@@ -238,6 +241,7 @@ def train(
         "max_cycles": env.base_env.max_steps,
         "continuous_actions": env.base_env.is_continuous,
         "vision_radius": env.base_env.vision_radius,
+        "randomize_safe_zones": env.base_env.randomize_safe_zones,
     }
 
     torch.save(
