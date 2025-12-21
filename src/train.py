@@ -1,5 +1,6 @@
 import time
 
+import numpy as np
 import torch
 from torchrl.envs import check_env_specs
 from torchrl.collectors import SyncDataCollector
@@ -10,6 +11,13 @@ import tqdm
 from src.models import make_policy, make_critic
 from src.sar_env import make_env
 from src.logger import RunContext, TensorboardLogger
+
+
+def _get_metrics_env(env):
+    base = getattr(env, "base_env", None)
+    while base is not None and not hasattr(base, "pop_episode_metrics"):
+        base = getattr(base, "base_env", getattr(base, "_env", None))
+    return base if base is not None else env
 
 
 def train(
@@ -114,6 +122,8 @@ def train(
     )
 
     for batch in collector:
+        metrics_env = _get_metrics_env(env)
+
         # 1. Prepare Batch
         # Add 'terminated' if missing (older versions of wrappers might miss it)
         if ("agents", "terminated") not in batch.keys(include_nested=True):
@@ -201,6 +211,23 @@ def train(
             # Log episode metrics
             logger.log_scalar("train/episode_reward", mean_reward, step=iteration)
             logger.log_scalar("train/total_frames", total_frames, step=iteration)
+
+            # Pull environment metrics for the just-finished episodes
+            metrics = metrics_env.pop_episode_metrics()
+            if metrics:
+                # Aggregate across episodes that finished in this batch
+                rescues_pct = np.mean([m["rescues_pct"] for m in metrics])
+                collisions = np.mean([m["collisions"] for m in metrics])
+                coverage = np.mean([m["coverage_cells"] for m in metrics])
+                logger.log_dict(
+                    "train/episode_metrics",
+                    {
+                        "rescues_pct": rescues_pct,
+                        "collisions": collisions,
+                        "coverage_cells": coverage,
+                    },
+                    step=iteration,
+                )
 
         collector.update_policy_weights_()
 

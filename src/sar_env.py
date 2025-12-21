@@ -100,6 +100,27 @@ class SearchAndRescueEnv(ParallelEnv):
         self.screen = None
         self.clock = None
 
+        # Metrics state (reset each episode)
+        self._cell_size = 0.05
+        self._episode_counter = 0
+        self._visited_cells = []
+        self._collision_events = 0
+        self._completed_episode_metrics = []
+
+    def _reset_metrics(self) -> None:
+        """Reset per-episode metric trackers."""
+        self._visited_cells = [set() for _ in range(self.num_rescuers)]
+        self._collision_events = 0
+
+    def _hash_pos(self, pos: np.ndarray) -> tuple[int, int]:
+        return tuple(np.floor(pos / self._cell_size).astype(int))
+
+    def pop_episode_metrics(self) -> list[dict]:
+        """Return and clear metrics for episodes that completed since last call."""
+        metrics = self._completed_episode_metrics
+        self._completed_episode_metrics = []
+        return metrics
+
     def reset(self, seed: Optional[int] = None, options: Optional[dict] = None):
         self.steps = 0
 
@@ -110,6 +131,10 @@ class SearchAndRescueEnv(ParallelEnv):
 
         # Reset Agents list (required by PettingZoo API)
         self.agents = self.possible_agents[:]
+
+        # Metrics state (reset each episode)
+        self._episode_counter += 1
+        self._reset_metrics()
 
         # Positions: Rescuers, Victims, Trees, SafeZones (using self.np_random)
         self.rescuer_pos = self.np_random.uniform(-0.8, 0.8, (self.num_rescuers, 2))
@@ -323,6 +348,8 @@ class SearchAndRescueEnv(ParallelEnv):
                 dist = np.linalg.norm(to_tree)
                 min_dist = self.agent_size + self.tree_radius
                 if dist < min_dist:
+                    # Track collision metric
+                    self._collision_events += 1
                     # Tree collision penalty
                     rewards[agent] -= 1
                     # Compute penetration depth and normal
@@ -349,6 +376,8 @@ class SearchAndRescueEnv(ParallelEnv):
                 dist = np.linalg.norm(to_other)
 
                 if dist < agent_repulsion_radius and dist > 1e-6:
+                    # Track collision between agents (count once per pair)
+                    self._collision_events += 1
                     # Apply soft repulsion force inversely proportional to distance
                     repulsion_force = (
                         repulsion_strength * (agent_repulsion_radius - dist) / dist
@@ -429,6 +458,10 @@ class SearchAndRescueEnv(ParallelEnv):
         # 3. Logic: Rescues & Rewards
         saved_count = self._compute_rewards(rewards)
 
+        # Track coverage each step (after physics updates)
+        for i, agent in enumerate(self.agents):
+            self._visited_cells[i].add(self._hash_pos(self.rescuer_pos[i].copy()))
+
         self.steps += 1
 
         # Termination conditions
@@ -438,6 +471,25 @@ class SearchAndRescueEnv(ParallelEnv):
         elif self.steps >= self.max_steps:
             truncations = {a: True for a in self.agents}
             self.agents = []
+
+        if not self.agents:
+            # Episode ended; aggregate metrics
+            rescues_pct = (
+                100.0
+                * float(np.count_nonzero(self.victim_saved))
+                / max(1, self.num_victims)
+            )
+            coverage_cells = len(set().union(*self._visited_cells))
+            collisions = self._collision_events
+            self._completed_episode_metrics.append(
+                {
+                    "episode": self._episode_counter,
+                    "rescues_pct": rescues_pct,
+                    "collisions": collisions,
+                    "coverage_cells": coverage_cells,
+                }
+            )
+            self._reset_metrics()
 
         return self._get_obs(), rewards, terminations, truncations, infos
 
