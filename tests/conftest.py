@@ -15,6 +15,6 @@ def _headless_pygame():
 @pytest.fixture
 def make_env():
     def _make(**kwargs) -> SearchAndRescueEnv:
-        return SearchAndRescueEnv(render_mode=None, device="cpu", **kwargs)
+        return SearchAndRescueEnv(render_mode=None, **kwargs)
 
     return _make
