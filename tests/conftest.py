@@ -193,6 +193,10 @@ def is_masked_tree(tree_obs: np.ndarray, atol: float = 1e-5) -> bool:
 
 def place_agent(env: SearchAndRescueEnv, agent_idx: int, pos: tuple[float, float]):
     """Place an agent at a specific position."""
+    if not (0 <= agent_idx < env.num_rescuers):
+        raise ValueError(
+            f"Invalid agent_idx {agent_idx}; expected 0 <= agent_idx < {env.num_rescuers}."
+        )
     env.rescuer_pos[agent_idx] = np.array(pos, dtype=np.float64)
 
 
