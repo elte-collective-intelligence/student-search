@@ -28,6 +28,18 @@ def _get_obs_slice_indices(env):
     }
 
 
+def _make_simple_env(make_env):
+    """Helper function to create a simple environment for occlusion tests."""
+    return make_env(
+        num_rescuers=1,
+        num_victims=1,
+        num_trees=1,
+        num_safe_zones=0,
+        seed=42,
+        vision_radius=1.0,
+    )
+
+
 def test_occlusion_blocks_tree_in_observation(make_env):
     """Test that trees block vision and visibility masks are set correctly."""
     env = make_env(
@@ -386,6 +398,55 @@ def test_safe_zones_always_visible(make_env):
         ), f"Safe zone {i} type incorrect. Got {zone_type}, expected {env.safe_zone_types[i]}"
 
 
+def test_tree_occludes_other_trees(make_env):
+    """Test that a tree can occlude another tree."""
+    env = make_env(
+        num_rescuers=1,
+        num_victims=0,
+        num_trees=2,
+        num_safe_zones=0,
+        seed=42,
+        vision_radius=1.0,
+    )
+
+    obs, _ = env.reset()
+    agent = env.agents[0]
+    agent_idx = 0
+
+    env.rescuer_pos[agent_idx] = np.array([-0.5, 0.0])
+    # Place first tree between agent and second tree
+    env.tree_pos[0] = np.array([0.0, 0.0])
+    env.tree_pos[1] = np.array([0.5, 0.0])
+
+    obs = env._get_obs()
+    obs_vec = obs[agent]
+    slices = _get_obs_slice_indices(env)
+
+    tree_slice = slices["trees"]
+
+    # First tree should be visible
+    tree0_obs = obs_vec[tree_slice.start : tree_slice.start + 2]  # noqa E203
+    expected_tree0_rel = env.tree_pos[0] - env.rescuer_pos[agent_idx]
+    assert np.allclose(
+        tree0_obs, expected_tree0_rel, atol=1e-5
+    ), f"First tree should be visible. Got {tree0_obs}, expected {expected_tree0_rel}"
+
+    # Second tree should be blocked by first tree
+    tree1_obs = obs_vec[tree_slice.start + 2 : tree_slice.start + 4]  # noqa: E203
+    assert np.allclose(
+        tree1_obs, [0.0, 0.0], atol=1e-5
+    ), f"Second tree should be blocked. Got {tree1_obs}, expected [0.0, 0.0]"
+
+    # Verify with _is_visible
+    assert env._is_visible(
+        env.rescuer_pos[agent_idx], env.tree_pos[0], env.tree_radius, exclude_tree_idx=0
+    ), "First tree should be visible"
+
+    assert not env._is_visible(
+        env.rescuer_pos[agent_idx], env.tree_pos[1], env.tree_radius
+    ), "Second tree should be blocked by first tree"
+
+
 def test_relative_position_calculation(make_env):
     """Test that relative positions in observations are calculated correctly."""
     env = make_env(
@@ -452,16 +513,9 @@ def test_relative_position_calculation(make_env):
 
 def test_occlusion_tangent_case(make_env):
     """Test occlusion when tree is tangent to the line of sight (edge case)."""
-    env = make_env(
-        num_rescuers=1,
-        num_victims=1,
-        num_trees=1,
-        num_safe_zones=0,
-        seed=42,
-        vision_radius=1.0,
-    )
+    env = _make_simple_env(make_env)
 
-    obs, _ = env.reset()
+    _, _ = env.reset()
     agent_idx = 0
 
     env.rescuer_pos[agent_idx] = np.array([-0.5, 0.0])
