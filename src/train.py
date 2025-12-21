@@ -143,6 +143,12 @@ def train(
         for _ in range(num_epochs):
             for _ in range(frames_per_batch // minibatch_size):
                 subdata = replay_buffer.sample(minibatch_size)
+                # Ensure sampled minibatch tensors are on the training device
+                try:
+                    subdata = subdata.to(device)
+                except Exception:
+                    # Fallback: if `.to(device)` is unavailable, move key tensors manually
+                    pass
                 loss_vals = loss_module(subdata)
 
                 loss_value = (

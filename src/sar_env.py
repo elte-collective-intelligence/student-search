@@ -600,7 +600,7 @@ class SearchAndRescueEnv(ParallelEnv):
 def make_env(device: Union[torch.device, str] = "cpu", **kwargs) -> TransformedEnv:
     env = SearchAndRescueEnv(**kwargs)
     group_map = {"agents": env.possible_agents}
-    env = PettingZooWrapper(env, group_map=group_map, use_mask=True)
+    env = PettingZooWrapper(env, group_map=group_map, use_mask=True, device=device)
     env = TransformedEnv(
         env,
         RewardSum(in_keys=[env.reward_key], out_keys=[("agents", "episode_reward")]),
