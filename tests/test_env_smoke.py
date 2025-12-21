@@ -377,8 +377,14 @@ class TestSavingAndTermination:
         victim_type = env.victim_types[0]
         target_zone = env.safezone_pos[victim_type]
 
-        # Place victim at safe zone center
+        # Place agent near the safe zone so victim gets assigned
+        place_agent(env, 0, target_zone.copy())
+
+        # Place victim at safe zone center (close to agent)
         env.victim_pos[0] = target_zone.copy()
+
+        # Manually assign victim to agent (or ensure they're close enough)
+        env.victim_assignments[0] = 0
 
         _, rewards, _, _, _ = env.step({agent_name: noop_action()})
 
