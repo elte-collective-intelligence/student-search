@@ -141,8 +141,6 @@ def train(
         batch = batch.reshape(-1)
         replay_buffer.extend(batch)
 
-        minibatch_size = 128
-
         # 2. PPO Update
         avg_loss_objective = 0.0
         avg_loss_critic = 0.0
@@ -151,8 +149,8 @@ def train(
         num_updates = 0
 
         for _ in range(num_epochs):
-            for _ in range(frames_per_batch // minibatch_size):
-                subdata = replay_buffer.sample(minibatch_size)
+            for _ in range(frames_per_batch // batch_size):
+                subdata = replay_buffer.sample(batch_size)
                 # Ensure sampled minibatch tensors are on the training device
                 try:
                     subdata = subdata.to(device)

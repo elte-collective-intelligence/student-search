@@ -63,10 +63,12 @@ def main(cfg: DictConfig):
         train(
             steps=cfg.train.total_timesteps,
             batch_size=cfg.train.batch_size,
+            frames_per_batch=cfg.train.frames_per_batch,
             seed=cfg.train.seed,
             save_folder=cfg.save_folder,
             enable_logging=enable_logging,
             render_mode=cfg.train.render_mode,
+            num_epochs=cfg.train.n_epochs,
             **env_kwargs,
         )
     elif cfg.eval.active:
