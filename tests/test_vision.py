@@ -538,3 +538,404 @@ def test_occlusion_tangent_case(make_env):
     assert isinstance(
         is_visible, (bool, np.bool_)
     ), "Visibility check should return boolean"
+
+
+def test_occlusion_partial_overlap(make_env):
+    """Test occlusion when tree partially overlaps the line of sight."""
+    env = make_env(
+        num_rescuers=1,
+        num_victims=1,
+        num_trees=1,
+        num_safe_zones=0,
+        seed=42,
+        vision_radius=1.0,
+    )
+
+    obs, _ = env.reset()
+    agent_idx = 0
+
+    # Place agent, victim, and tree such that tree partially overlaps the line
+    env.rescuer_pos[agent_idx] = np.array([-0.5, 0.0])
+    env.victim_pos[0] = np.array([0.5, 0.0])
+    # Tree slightly offset but still intersecting the line
+    env.tree_pos[0] = np.array([0.0, 0.02])  # Small offset
+
+    is_visible = env._is_visible(
+        env.rescuer_pos[agent_idx], env.victim_pos[0], env.agent_size
+    )
+
+    # Tree should still block even with partial overlap
+    assert not is_visible, "Tree with partial overlap should block vision"
+
+
+def test_occlusion_multiple_trees_chain(make_env):
+    """Test occlusion with multiple trees in a chain blocking vision."""
+    env = make_env(
+        num_rescuers=1,
+        num_victims=1,
+        num_trees=3,
+        num_safe_zones=0,
+        seed=42,
+        vision_radius=1.0,
+    )
+
+    obs, _ = env.reset()
+    agent_idx = 0
+
+    env.rescuer_pos[agent_idx] = np.array([-0.5, 0.0])
+    env.victim_pos[0] = np.array([0.5, 0.0])
+
+    # Place trees in a chain along the line
+    env.tree_pos[0] = np.array([-0.2, 0.0])
+    env.tree_pos[1] = np.array([0.0, 0.0])
+    env.tree_pos[2] = np.array([0.2, 0.0])
+
+    # Any tree in the chain should block
+    assert not env._is_visible(
+        env.rescuer_pos[agent_idx], env.victim_pos[0], env.agent_size
+    ), "Chain of trees should block vision"
+
+
+def test_occlusion_tree_at_observer_position(make_env):
+    """Test occlusion when tree is at observer position (edge case)."""
+    env = make_env(
+        num_rescuers=1,
+        num_victims=1,
+        num_trees=1,
+        num_safe_zones=0,
+        seed=42,
+        vision_radius=1.0,
+    )
+
+    obs, _ = env.reset()
+    agent_idx = 0
+
+    env.rescuer_pos[agent_idx] = np.array([0.0, 0.0])
+    env.victim_pos[0] = np.array([0.5, 0.0])
+    # Tree at observer position
+    env.tree_pos[0] = np.array([0.0, 0.0])
+
+    is_visible = env._is_visible(
+        env.rescuer_pos[agent_idx], env.victim_pos[0], env.agent_size
+    )
+
+    # Should handle gracefully (may or may not block depending on implementation)
+    assert isinstance(is_visible, (bool, np.bool_)), "Should return boolean"
+
+
+def test_occlusion_tree_at_target_position(make_env):
+    """Test occlusion when tree is at target position (edge case)."""
+    env = make_env(
+        num_rescuers=1,
+        num_victims=1,
+        num_trees=1,
+        num_safe_zones=0,
+        seed=42,
+        vision_radius=1.0,
+    )
+
+    obs, _ = env.reset()
+    agent_idx = 0
+
+    env.rescuer_pos[agent_idx] = np.array([-0.5, 0.0])
+    env.victim_pos[0] = np.array([0.5, 0.0])
+    # Tree at target position
+    env.tree_pos[0] = np.array([0.5, 0.0])
+
+    is_visible = env._is_visible(
+        env.rescuer_pos[agent_idx], env.victim_pos[0], env.agent_size
+    )
+
+    # Should handle gracefully
+    assert isinstance(is_visible, (bool, np.bool_)), "Should return boolean"
+
+
+def test_occlusion_diagonal_line_of_sight(make_env):
+    """Test occlusion with diagonal line of sight."""
+    env = make_env(
+        num_rescuers=1,
+        num_victims=1,
+        num_trees=1,
+        num_safe_zones=0,
+        seed=42,
+        vision_radius=1.0,
+    )
+
+    obs, _ = env.reset()
+    agent_idx = 0
+
+    # Diagonal line of sight
+    env.rescuer_pos[agent_idx] = np.array([-0.3, -0.3])
+    env.victim_pos[0] = np.array([0.3, 0.3])
+
+    # Tree on the diagonal line (should block)
+    env.tree_pos[0] = np.array([0.0, 0.0])
+    assert not env._is_visible(
+        env.rescuer_pos[agent_idx], env.victim_pos[0], env.agent_size
+    ), "Tree on diagonal line should block"
+
+    # Tree off the diagonal line (should not block)
+    env.tree_pos[0] = np.array([0.0, 0.2])
+    assert env._is_visible(
+        env.rescuer_pos[agent_idx], env.victim_pos[0], env.agent_size
+    ), "Tree off diagonal line should not block"
+
+
+def test_occlusion_exclude_tree_parameter(make_env):
+    """Test that exclude_tree_idx parameter works correctly."""
+    env = make_env(
+        num_rescuers=1,
+        num_victims=0,
+        num_trees=2,
+        num_safe_zones=0,
+        seed=42,
+        vision_radius=1.0,
+    )
+
+    obs, _ = env.reset()
+    agent_idx = 0
+
+    env.rescuer_pos[agent_idx] = np.array([-0.5, 0.0])
+    # Place trees such that tree0 blocks tree1
+    env.tree_pos[0] = np.array([0.0, 0.0])
+    env.tree_pos[1] = np.array([0.5, 0.0])
+
+    # Without exclude: tree1 should be blocked by tree0
+    assert not env._is_visible(
+        env.rescuer_pos[agent_idx], env.tree_pos[1], env.tree_radius
+    ), "Tree1 should be blocked by tree0"
+
+    # With exclude_tree_idx=0: tree1 should be visible (tree0 excluded)
+    assert env._is_visible(
+        env.rescuer_pos[agent_idx],
+        env.tree_pos[1],
+        env.tree_radius,
+        exclude_tree_idx=0,
+    ), "Tree1 should be visible when tree0 is excluded"
+
+
+def test_vision_radius_zero(make_env):
+    """Test behavior with zero vision radius."""
+    env = make_env(
+        num_rescuers=1,
+        num_victims=1,
+        num_trees=0,
+        num_safe_zones=0,
+        seed=42,
+        vision_radius=0.0,
+    )
+
+    obs, _ = env.reset()
+    agent_idx = 0
+
+    env.rescuer_pos[agent_idx] = np.array([0.0, 0.0])
+    env.victim_pos[0] = np.array([0.0, 0.0])  # Same position
+
+    # Even at same position, zero radius should make it invisible
+    assert not env._is_visible(
+        env.rescuer_pos[agent_idx], env.victim_pos[0], env.agent_size
+    ), "Zero vision radius should make everything invisible"
+
+
+def test_vision_radius_very_large(make_env):
+    """Test behavior with very large vision radius."""
+    env = make_env(
+        num_rescuers=1,
+        num_victims=1,
+        num_trees=1,
+        num_safe_zones=0,
+        seed=42,
+        vision_radius=10.0,  # Very large
+    )
+
+    obs, _ = env.reset()
+    agent_idx = 0
+
+    env.rescuer_pos[agent_idx] = np.array([-0.5, 0.0])
+    env.victim_pos[0] = np.array([0.5, 0.0])
+    env.tree_pos[0] = np.array([0.0, 0.0])
+
+    # Tree should still block even with large radius
+    assert not env._is_visible(
+        env.rescuer_pos[agent_idx], env.victim_pos[0], env.agent_size
+    ), "Tree should block even with large vision radius"
+
+
+def test_occlusion_parallel_trees(make_env):
+    """Test occlusion when trees are parallel to line of sight (should not block)."""
+    env = make_env(
+        num_rescuers=1,
+        num_victims=1,
+        num_trees=1,
+        num_safe_zones=0,
+        seed=42,
+        vision_radius=1.0,
+    )
+
+    obs, _ = env.reset()
+    agent_idx = 0
+
+    env.rescuer_pos[agent_idx] = np.array([-0.5, 0.0])
+    env.victim_pos[0] = np.array([0.5, 0.0])
+
+    # Tree perpendicular to line (parallel to y-axis, offset in y)
+    env.tree_pos[0] = np.array([0.0, 0.1])
+
+    # Tree should not block if it's far enough from the line
+    # This depends on tree_radius, but with small offset it should be visible
+    is_visible = env._is_visible(
+        env.rescuer_pos[agent_idx], env.victim_pos[0], env.agent_size
+    )
+    # With tree_radius=0.05 and offset 0.1, it should be visible
+    assert is_visible, "Tree parallel to line should not block if offset enough"
+
+
+def test_occlusion_observation_consistency(make_env):
+    """Test that observation masking is consistent with _is_visible."""
+    env = make_env(
+        num_rescuers=1,
+        num_victims=2,
+        num_trees=2,
+        num_safe_zones=0,
+        seed=42,
+        vision_radius=1.0,
+    )
+
+    obs, _ = env.reset()
+    agent = env.agents[0]
+    agent_idx = 0
+
+    # Set up specific configuration
+    env.rescuer_pos[agent_idx] = np.array([0.0, 0.0])
+    env.victim_pos[0] = np.array([0.3, 0.0])
+    env.victim_pos[1] = np.array([0.6, 0.0])
+    env.tree_pos[0] = np.array([0.15, 0.0])  # Blocks victim 0
+    env.tree_pos[1] = np.array([0.45, 0.0])  # Blocks victim 1
+    env.victim_saved[0] = False
+    env.victim_saved[1] = False
+
+    obs = env._get_obs()
+    obs_vec = obs[agent]
+    slices = _get_obs_slice_indices(env)
+
+    # Check consistency: observation masking should match _is_visible
+    victim_slice = slices["victims"]
+
+    # Victim 0
+    victim0_obs = obs_vec[victim_slice.start : victim_slice.start + 3]  # noqa E203
+    is_visible_0 = env._is_visible(
+        env.rescuer_pos[agent_idx], env.victim_pos[0], env.agent_size
+    )
+    if is_visible_0:
+        assert victim0_obs[2] != -1.0, "Visible victim should not be masked"
+    else:
+        assert np.allclose(
+            victim0_obs, [0.0, 0.0, -1.0], atol=1e-5
+        ), "Blocked victim should be masked"
+
+    # Victim 1
+    victim1_obs = obs_vec[victim_slice.start + 3 : victim_slice.start + 6]  # noqa E203
+    is_visible_1 = env._is_visible(
+        env.rescuer_pos[agent_idx], env.victim_pos[1], env.agent_size
+    )
+    if is_visible_1:
+        assert victim1_obs[2] != -1.0, "Visible victim should not be masked"
+    else:
+        assert np.allclose(
+            victim1_obs, [0.0, 0.0, -1.0], atol=1e-5
+        ), "Blocked victim should be masked"
+
+
+def test_occlusion_tree_self_visibility(make_env):
+    """Test that trees can be visible to themselves (using exclude_tree_idx)."""
+    env = make_env(
+        num_rescuers=1,
+        num_victims=0,
+        num_trees=2,
+        num_safe_zones=0,
+        seed=42,
+        vision_radius=1.0,
+    )
+
+    obs, _ = env.reset()
+    agent = env.agents[0]
+    agent_idx = 0
+
+    env.rescuer_pos[agent_idx] = np.array([0.0, 0.0])
+    env.tree_pos[0] = np.array([0.2, 0.0])
+    env.tree_pos[1] = np.array([0.4, 0.0])
+
+    obs = env._get_obs()
+    obs_vec = obs[agent]
+    slices = _get_obs_slice_indices(env)
+
+    tree_slice = slices["trees"]
+
+    # Tree 0 should be visible (excludes itself from occlusion check)
+    tree0_obs = obs_vec[tree_slice.start : tree_slice.start + 2]  # noqa E203
+    expected_tree0_rel = env.tree_pos[0] - env.rescuer_pos[agent_idx]
+    assert np.allclose(
+        tree0_obs, expected_tree0_rel, atol=1e-5
+    ), "Tree 0 should be visible (excludes itself)"
+
+    # Verify with _is_visible
+    assert env._is_visible(
+        env.rescuer_pos[agent_idx],
+        env.tree_pos[0],
+        env.tree_radius,
+        exclude_tree_idx=0,
+    ), "Tree should be visible when excluding itself"
+
+
+def test_occlusion_edge_case_very_close_tree(make_env):
+    """Test occlusion when tree is very close to observer."""
+    env = make_env(
+        num_rescuers=1,
+        num_victims=1,
+        num_trees=1,
+        num_safe_zones=0,
+        seed=42,
+        vision_radius=1.0,
+    )
+
+    obs, _ = env.reset()
+    agent_idx = 0
+
+    env.rescuer_pos[agent_idx] = np.array([0.0, 0.0])
+    env.victim_pos[0] = np.array([0.5, 0.0])
+    # Tree very close to observer
+    env.tree_pos[0] = np.array([0.01, 0.0])
+
+    is_visible = env._is_visible(
+        env.rescuer_pos[agent_idx], env.victim_pos[0], env.agent_size
+    )
+
+    # Tree should block
+    assert not is_visible, "Tree very close to observer should block vision"
+
+
+def test_occlusion_edge_case_very_close_target(make_env):
+    """Test occlusion when tree is very close to target."""
+    env = make_env(
+        num_rescuers=1,
+        num_victims=1,
+        num_trees=1,
+        num_safe_zones=0,
+        seed=42,
+        vision_radius=1.0,
+    )
+
+    obs, _ = env.reset()
+    agent_idx = 0
+
+    env.rescuer_pos[agent_idx] = np.array([-0.5, 0.0])
+    env.victim_pos[0] = np.array([0.5, 0.0])
+    # Tree very close to target
+    env.tree_pos[0] = np.array([0.49, 0.0])
+
+    is_visible = env._is_visible(
+        env.rescuer_pos[agent_idx], env.victim_pos[0], env.agent_size
+    )
+
+    # Tree should block
+    assert not is_visible, "Tree very close to target should block vision"

@@ -133,6 +133,9 @@ class SearchAndRescueEnv(ParallelEnv):
                             (e.g., when checking if a tree itself is visible)
         """
         dist = np.linalg.norm(target_pos - observer_pos)
+        # If vision radius is zero, nothing is visible
+        if self.vision_radius == 0.0:
+            return False
         if dist > self.vision_radius:
             return False
 
@@ -143,20 +146,33 @@ class SearchAndRescueEnv(ParallelEnv):
 
             tree_c = self.tree_pos[t_idx]
 
+            # Skip trees that are at the target position (target tree should not block itself)
+            tree_to_target_dist = np.linalg.norm(tree_c - target_pos)
+            if tree_to_target_dist < 1e-6:
+                continue  # Tree is at target position, skip it
+
             # Vector from observer to target
             d_vec = target_pos - observer_pos
             # Vector from observer to tree center
             f_vec = observer_pos - tree_c
 
             a = np.dot(d_vec, d_vec)
+            # Handle edge case: observer and target at same position
+            if a < 1e-10:
+                # If observer and target are at same position, check if tree is at that position
+                tree_dist = np.linalg.norm(tree_c - observer_pos)
+                if tree_dist < self.tree_radius:
+                    return False  # Tree is blocking (at same position)
+                continue  # No blocking if tree is not at same position
+
             b = 2 * np.dot(f_vec, d_vec)
             c = np.dot(f_vec, f_vec) - self.tree_radius**2
 
             discriminant = b * b - 4 * a * c
             if discriminant >= 0:
                 discriminant = np.sqrt(discriminant)
-                t1 = (-b - discriminant) / (2 * a + 1e-6)
-                t2 = (-b + discriminant) / (2 * a + 1e-6)
+                t1 = (-b - discriminant) / (2 * a)
+                t2 = (-b + discriminant) / (2 * a)
 
                 if (0 <= t1 <= 1) or (0 <= t2 <= 1):
                     return False  # Blocked
