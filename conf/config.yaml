@@ -4,7 +4,7 @@ env:
   trees: 8
   safe_zones: 4
   max_cycles: 300
-  continuous_actions: false
+  continuous_actions: true
   vision_radius: 0.4
 train:
   active: false
@@ -25,3 +25,11 @@ tensorboard:
   active: false
   port: 6006
   enabled: true  # Enable TensorBoard logging during train/eval
+
+# Hydra configuration to prevent creating new output directories every run
+hydra:
+  run:
+    dir: .  # Run from current directory instead of creating outputs/date/time
+  output_subdir: null  # Don't create .hydra subdirectory
+  job:
+    chdir: false  # Don't change working directory
