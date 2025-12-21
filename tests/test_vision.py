@@ -11,7 +11,7 @@ def make_simple_env(make_env):
         num_rescuers=1,
         num_victims=1,
         num_trees=1,
-        num_safe_zones=0,
+        num_safe_zones=4,
         seed=42,
         vision_radius=1.0,
         **kwargs,
@@ -197,7 +197,7 @@ def test_occlusion_no_block_when_tree_outside_segment(env_simple):
 
 def test_saved_victims_are_masked(make_simple_env):
     """Test that saved victims are always masked in observations."""
-    env = make_simple_env(num_trees=0, num_safe_zones=1)
+    env = make_simple_env(num_trees=0, num_safe_zones=4)
     obs, _ = env.reset()
     agent = env.agents[0]
     agent_idx = 0

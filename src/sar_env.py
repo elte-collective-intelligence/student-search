@@ -123,19 +123,21 @@ class SearchAndRescueEnv(ParallelEnv):
     def _is_visible(
         self, observer_pos, target_pos, target_radius, exclude_tree_idx=None
     ):
-        """Checks distance and occlusion by trees.
-
+        """Checks whether a target is within vision range and not occluded by trees.
         Args:
-            observer_pos: Position of the observer
-            target_pos: Position of the target to check visibility of
-            target_radius: Radius of the target (reserved for potential future use in visibility calculations)
-            exclude_tree_idx: Optional tree index to exclude from occlusion check
-                            (e.g., when checking if a tree itself is visible)
+            observer_pos: Position of the observer.
+            target_pos: Position of the target to check visibility of.
+            target_radius: Radius of the target. Currently unused, kept for API compatibility
+                and potential future use in more detailed visibility calculations.
+            exclude_tree_idx: Optional tree index to exclude from the occlusion check
+                (e.g., when checking if a tree itself is visible). Occlusion is currently
+                determined using the environment's ``tree_radius`` for all trees.
         """
-        dist = np.linalg.norm(target_pos - observer_pos)
         # If vision radius is zero, nothing is visible
         if self.vision_radius == 0.0:
             return False
+
+        dist = np.linalg.norm(target_pos - observer_pos)
         if dist > self.vision_radius:
             return False
 
