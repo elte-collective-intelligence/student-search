@@ -293,19 +293,12 @@ class SearchAndRescueEnv(ParallelEnv):
             agent_id_onehot[i] = 1.0
             obs_vec.extend(agent_id_onehot)
 
-            # 3. Safe Zones (with visibility masking)
+            # 3. Safe Zones (always visible landmarks)
             for sz_i in range(self.num_safe_zones):
-                if self._is_visible(
-                    my_pos, self.safezone_pos[sz_i], self.safe_zone_radius
-                ):
-                    rel_pos = self.safezone_pos[sz_i] - my_pos
-                    # We append the numeric type (0-3) so the network knows which zone is which
-                    obs_vec.extend(
-                        [rel_pos[0], rel_pos[1], float(self.safe_zone_types[sz_i])]
-                    )
-                else:
-                    # Masked: not visible due to distance or occlusion
-                    obs_vec.extend([0.0, 0.0, -1.0])
+                rel_pos = self.safezone_pos[sz_i] - my_pos
+                obs_vec.extend(
+                    [rel_pos[0], rel_pos[1], float(self.safe_zone_types[sz_i])]
+                )
 
             # 4. Trees (always provide true rel_pos, visibility bit gates usage)
             for t_i in range(self.max_trees):
@@ -732,6 +725,11 @@ class SearchAndRescueEnv(ParallelEnv):
                         # Stronger penalty to discourage clustering (increased from -1.0)
                         rewards[self.agents[i]] -= 5.0
                         rewards[self.agents[j]] -= 5.0
+
+        # Small penalty for idling to discourage stopping far from goals
+        for i, agent in enumerate(self.agents):
+            if np.linalg.norm(self.rescuer_vel[i]) < 1e-3:
+                rewards[agent] -= 0.01
 
         return saved_count
 
