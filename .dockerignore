@@ -18,6 +18,7 @@ Dockerfile
 # Byte-compiled / optimized / DLL files
 **/__pycache__/
 **/*.py[cod]
+.pytest_cache/
 
 # C extensions
 *.so
@@ -95,3 +96,8 @@ README.md
 *.pdf
 search_rescue_logs/
 docker/
+outputs/
+tests/
+.flake8
+.python-version
+.pre-commit-config.yaml
