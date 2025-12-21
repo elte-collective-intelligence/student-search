@@ -144,7 +144,14 @@ def get_tree_obs(obs_vec: np.ndarray, slices: dict, tree_idx: int) -> np.ndarray
 
 def get_victim_obs(obs_vec: np.ndarray, slices: dict, victim_idx: int) -> np.ndarray:
     """Extract observation for a specific victim."""
-    start = slices["victims"].start + victim_idx * 3
+    victim_slice = slices["victims"]
+    victim_span = victim_slice.stop - victim_slice.start
+    num_victims = victim_span // 3 if victim_span >= 0 else 0
+    if not (0 <= victim_idx < num_victims):
+        raise IndexError(
+            f"victim_idx {victim_idx} is out of range for {num_victims} victims"
+        )
+    start = victim_slice.start + victim_idx * 3
     return obs_vec[start : start + 3]  # noqa: E203
 
 
