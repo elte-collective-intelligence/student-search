@@ -78,7 +78,6 @@ class TestBasicOcclusion:
     def test_tree_behind_observer_no_block(self, env_simple):
         """Trees behind observer don't block vision."""
         env = env_simple
-        env.reset()
 
         place_agent(env, 0, (-0.5, 0.0))
         place_victim(env, 0, (0.5, 0.0))
