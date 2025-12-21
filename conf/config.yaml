@@ -4,8 +4,7 @@ env:
   trees: 8
   safe_zones: 4
   max_cycles: 300
-  continuous_actions: true
-  randomize_safe_zones: true
+  continuous_actions: false
   vision_radius: 0.4
 train:
   active: false

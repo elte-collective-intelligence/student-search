@@ -19,11 +19,14 @@ class SearchAndRescueEnv(ParallelEnv):
         num_trees: int = 5,
         num_safe_zones: int = 4,
         max_cycles: int = 200,
-        continuous_actions: bool = False,
+        continuous_actions: bool = True,
         vision_radius: float = 0.5,
         randomize_safe_zones: bool = False,
         seed: Optional[int] = None,
         render_mode: Optional[str] = None,
+        max_trees: Optional[
+            int
+        ] = None,  # For curriculum learning - fixes obs space size
     ):
         self.num_rescuers = num_rescuers
         self.num_victims = num_victims
@@ -33,6 +36,9 @@ class SearchAndRescueEnv(ParallelEnv):
         self.max_steps = max_cycles
         self.is_continuous = continuous_actions
         self.randomize_safe_zones = randomize_safe_zones
+
+        # For curriculum learning: use max_trees for obs space size, pad observations
+        self.max_trees = max_trees if max_trees is not None else num_trees
 
         # Initialize random number generator
         self._seed = seed
@@ -131,9 +137,7 @@ class SearchAndRescueEnv(ParallelEnv):
 
         self.observation_spaces = {
             agent: spaces.Box(
-                low=np.array(obs_low, dtype=np.float32),
-                high=np.array(obs_high, dtype=np.float32),
-                dtype=np.float32,
+                low=-np.inf, high=np.inf, shape=(self.obs_dim,), dtype=np.float32
             )
             for agent in self.agents
         }
@@ -184,7 +188,6 @@ class SearchAndRescueEnv(ParallelEnv):
         self.victim_pos = self.np_random.uniform(-0.8, 0.8, (self.num_victims, 2))
         self.victim_vel = np.zeros((self.num_victims, 2))
         self.victim_saved = np.zeros(self.num_victims, dtype=bool)
-        self.victim_last_switch = np.full(self.num_victims, -10_000, dtype=int)
 
         # Track which agent each victim is committed to (-1 = none)
         self.victim_assignments = np.full(self.num_victims, -1, dtype=int)
@@ -294,12 +297,19 @@ class SearchAndRescueEnv(ParallelEnv):
             agent_id_onehot[i] = 1.0
             obs_vec.extend(agent_id_onehot)
 
-            # 3. Safe Zones (always visible - static landmarks, no visibility gating needed)
+            # 3. Safe Zones (with visibility masking)
             for sz_i in range(self.num_safe_zones):
-                rel_pos = self.safezone_pos[sz_i] - my_pos
-                type_idx = float(self.safe_zone_types[sz_i])
-                # Safe zones are always visible=1 (static map objectives)
-                obs_vec.extend([rel_pos[0], rel_pos[1], type_idx, 1.0])
+                if self._is_visible(
+                    my_pos, self.safezone_pos[sz_i], self.safe_zone_radius
+                ):
+                    rel_pos = self.safezone_pos[sz_i] - my_pos
+                    # We append the numeric type (0-3) so the network knows which zone is which
+                    obs_vec.extend(
+                        [rel_pos[0], rel_pos[1], float(self.safe_zone_types[sz_i])]
+                    )
+                else:
+                    # Masked: not visible due to distance or occlusion
+                    obs_vec.extend([0.0, 0.0, -1.0])
 
             # 4. Trees (always provide true rel_pos, visibility bit gates usage)
             for t_i in range(self.num_trees):
@@ -316,17 +326,19 @@ class SearchAndRescueEnv(ParallelEnv):
                 # [rel_x, rel_y, visible] - true position always provided
                 obs_vec.extend([rel_pos[0], rel_pos[1], visible])
 
-            # 5. Victims (always provide true rel_pos and type, visibility bit gates usage)
+            # 5. Victims
             for v_i in range(self.num_victims):
-                rel_pos = self.victim_pos[v_i] - my_pos
-                # Visible if not saved AND within vision range AND not occluded
-                visible = float(
-                    not self.victim_saved[v_i]
-                    and self._is_visible(my_pos, self.victim_pos[v_i], self.agent_size)
-                )
-                type_idx = float(self.victim_types[v_i]) * visible
-                # [rel_x, rel_y, type_idx, visible] - true values always provided
-                obs_vec.extend([rel_pos[0], rel_pos[1], type_idx, visible])
+                # If visible and not saved
+                if not self.victim_saved[v_i] and self._is_visible(
+                    my_pos, self.victim_pos[v_i], self.agent_size
+                ):
+                    rel = self.victim_pos[v_i] - my_pos
+                    # Use numeric type (0-3) for observation
+                    obs_vec.extend([rel[0], rel[1], float(self.victim_types[v_i])])
+                else:
+                    obs_vec.extend(
+                        [0.0, 0.0, -1.0]
+                    )  # Masked (Type -1 indicates not visible)
 
             # Other rescuers removed from observation to focus learning on task
 
@@ -451,7 +463,6 @@ class SearchAndRescueEnv(ParallelEnv):
                 # Not assigned - assign if agent is close enough
                 if min_dist < self.follow_radius:
                     self.victim_assignments[v_i] = closest_agent_idx
-                    self.victim_last_switch[v_i] = self.steps
                     current_assignment = closest_agent_idx
             else:
                 # Already assigned - check if we should switch or release
@@ -469,18 +480,12 @@ class SearchAndRescueEnv(ParallelEnv):
                         self.victim_assignments[v_i] = closest_agent_idx
                         current_assignment = closest_agent_idx
                 # Switch only if another agent is significantly closer (0.6x distance)
-                else:
-                    cooldown = 10  # steps
-                    can_switch = (self.steps - self.victim_last_switch[v_i]) >= cooldown
-                    if (
-                        can_switch
-                        and closest_agent_idx != current_assignment
-                        and min_dist
-                        < dist_to_assigned * 0.3  # stronger hysteresis than 0.6
-                    ):
-                        self.victim_assignments[v_i] = closest_agent_idx
-                        self.victim_last_switch[v_i] = self.steps
-                        current_assignment = closest_agent_idx
+                elif (
+                    closest_agent_idx != current_assignment
+                    and min_dist < dist_to_assigned * 0.6
+                ):
+                    self.victim_assignments[v_i] = closest_agent_idx
+                    current_assignment = closest_agent_idx
 
             # Movement based on assignment
             if current_assignment != -1:
@@ -646,22 +651,15 @@ class SearchAndRescueEnv(ParallelEnv):
     def _compute_rewards(self, rewards) -> int:
         # Delta-based distance shaping (reward for getting closer, penalty for moving away)
         current_dists = self._compute_agent_victim_dists()
-        for a_i, agent in enumerate(self.agents):
-            # find a victim currently assigned to this agent
-            assigned_vs = np.where(self.victim_assignments == a_i)[0]
-            if assigned_vs.size == 0:
-                continue  # no assignment -> no shaping
-
-            v_i = int(assigned_vs[0])  # simplest: pick first
-            prev = getattr(self, "prev_assigned_dist", np.full(self.num_rescuers, 0.0))
-            dist = np.linalg.norm(self.rescuer_pos[a_i] - self.victim_pos[v_i])
-
-            # potential-based: reward getting closer to *your* victim
-            if prev[a_i] > 0:
-                rewards[agent] += (prev[a_i] - dist) * 0.3
-
-            prev[a_i] = dist
-            self.prev_assigned_dist = prev
+        for i, agent in enumerate(self.agents):
+            if (
+                hasattr(self, "prev_agent_victim_dists")
+                and self.prev_agent_victim_dists[i] > 0
+            ):
+                delta = (
+                    self.prev_agent_victim_dists[i] - current_dists[i]
+                )  # positive = got closer
+                rewards[agent] += delta * 0.1
         self.prev_agent_victim_dists = current_dists
 
         # Check safe zones
@@ -728,8 +726,8 @@ class SearchAndRescueEnv(ParallelEnv):
                     dist = np.linalg.norm(self.rescuer_pos[i] - self.rescuer_pos[j])
                     if dist < 0.15:  # Agents are overlapping/colliding
                         # Stronger penalty to discourage clustering (increased from -1.0)
-                        rewards[self.agents[i]] -= 3.0
-                        rewards[self.agents[j]] -= 3.0
+                        rewards[self.agents[i]] -= 5.0
+                        rewards[self.agents[j]] -= 5.0
 
         return saved_count
 

@@ -60,6 +60,16 @@ def main(cfg: DictConfig):
     }
 
     if cfg.train.active:
+        # Extract curriculum parameters if enabled
+        curriculum_kwargs = {}
+        if cfg.get("curriculum", {}).get("enabled", False):
+            curriculum_kwargs = {
+                "curriculum_enabled": True,
+                "curriculum_min_trees": cfg.curriculum.min_trees,
+                "curriculum_max_trees": cfg.curriculum.max_trees,
+                "curriculum_num_stages": cfg.curriculum.num_stages,
+            }
+
         train(
             steps=cfg.train.total_timesteps,
             batch_size=cfg.train.batch_size,
@@ -70,6 +80,7 @@ def main(cfg: DictConfig):
             render_mode=cfg.train.render_mode,
             num_epochs=cfg.train.n_epochs,
             **env_kwargs,
+            **curriculum_kwargs,
         )
     elif cfg.eval.active:
         evaluate(

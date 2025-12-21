@@ -19,6 +19,7 @@ venv/
 # IDE/editor config files
 .idea/
 .vscode/
+.history/
 
 # OS-specific files (macOS)
 .DS_Store
