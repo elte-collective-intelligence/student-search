@@ -4,17 +4,24 @@ env:
   trees: 8
   safe_zones: 4
   max_cycles: 300
-  continuous_actions: false
+  continuous_actions: true
+  randomize_safe_zones: true
   vision_radius: 0.4
+curriculum:
+  enabled: true  # Enable curriculum learning
+  min_trees: 0  # Starting number of trees (easy)
+  max_trees: 8  # Final number of trees (hard)
+  num_stages: 5  # Number of curriculum stages
+  # Scheduler will auto-calculate iterations_per_stage based on total_timesteps / num_stages
 train:
   active: false
-  total_timesteps: 102400
+  total_timesteps: 204800
   eval_freq: 500
   batch_size: 2048
-  n_epochs: 20
+  n_epochs: 40
   seed: 0
   render_mode: null
-  learning_rate: 0.001
+  learning_rate: 0.003
 eval:
   active: false
   games: 10

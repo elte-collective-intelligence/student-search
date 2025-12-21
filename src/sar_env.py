@@ -19,11 +19,14 @@ class SearchAndRescueEnv(ParallelEnv):
         num_trees: int = 5,
         num_safe_zones: int = 4,
         max_cycles: int = 200,
-        continuous_actions: bool = False,
+        continuous_actions: bool = True,
         vision_radius: float = 0.5,
         randomize_safe_zones: bool = False,
         seed: Optional[int] = None,
         render_mode: Optional[str] = None,
+        max_trees: Optional[
+            int
+        ] = None,  # For curriculum learning - fixes obs space size
     ):
         self.num_rescuers = num_rescuers
         self.num_victims = num_victims
@@ -33,6 +36,9 @@ class SearchAndRescueEnv(ParallelEnv):
         self.max_steps = max_cycles
         self.is_continuous = continuous_actions
         self.randomize_safe_zones = randomize_safe_zones
+
+        # For curriculum learning: use max_trees for obs space size, pad observations
+        self.max_trees = max_trees if max_trees is not None else num_trees
 
         # Initialize random number generator
         self._seed = seed
@@ -77,16 +83,17 @@ class SearchAndRescueEnv(ParallelEnv):
         # Observation Space Calculation (Partial Observability with Vision Masking)
         # [Self_Vel(2), Self_Pos(2), Agent_ID(num_rescuers),
         #  SafeZones(4 * 3: rel_x, rel_y, type_idx) - masked if occluded/far,
-        #  Trees(N * 2: rel_x, rel_y) - masked if occluded/far,
+        #  Trees(max_trees * 2: rel_x, rel_y) - masked if occluded/far OR beyond num_trees,
         #  Victims(N * 3: rel_x, rel_y, type_idx) - masked if occluded/far/saved]
         # Note: All spatial entities use visibility masking based on vision_radius and occlusion
         # Note: Other rescuers removed from observation to focus learning on task
+        # Note: For curriculum learning, obs space uses max_trees, unused slots are masked
 
         self.obs_dim = (
             4
             + num_rescuers  # Agent ID one-hot encoding
             + (self.num_safe_zones * 3)
-            + (self.num_trees * 2)
+            + (self.max_trees * 2)  # Use max_trees for fixed obs dimension
             + (self.num_victims * 3)
         )
 
@@ -121,8 +128,34 @@ class SearchAndRescueEnv(ParallelEnv):
         self._completed_episode_metrics = []
         return metrics
 
+    def set_num_trees(self, num_trees: int) -> None:
+        """
+        Update the number of trees (occluders) in the environment.
+
+        This is useful for curriculum learning where difficulty increases
+        by adding more occluders over time. Changes take effect on next reset().
+
+        Note: This only updates the target tree count. The actual tree positions
+        are created during reset(), so changes won't take effect until the
+        current episode ends and a new one begins.
+
+        Args:
+            num_trees: New number of trees to use
+        """
+        # Store the target tree count
+        # We don't update obs_dim or observation_spaces here because that would
+        # cause dimension mismatch errors during the current episode.
+        # Instead, we wait for the next reset() to apply the changes.
+        self._pending_num_trees = num_trees
+
     def reset(self, seed: Optional[int] = None, options: Optional[dict] = None):
         self.steps = 0
+
+        # Apply pending tree count update (from curriculum learning)
+        # Note: We don't change obs_dim since it's fixed to max_trees
+        if hasattr(self, "_pending_num_trees"):
+            self.num_trees = self._pending_num_trees
+            delattr(self, "_pending_num_trees")
 
         # Handle seeding
         if seed is not None:
@@ -266,14 +299,16 @@ class SearchAndRescueEnv(ParallelEnv):
                     # Masked: not visible due to distance or occlusion
                     obs_vec.extend([0.0, 0.0, -1.0])
 
-            # 4. Trees
-            for t_i in range(self.num_trees):
-                if self._is_visible(
+            # 4. Trees (pad to max_trees for curriculum learning)
+            for t_i in range(self.max_trees):
+                if t_i < self.num_trees and self._is_visible(
                     my_pos, self.tree_pos[t_i], self.tree_radius, exclude_tree_idx=t_i
                 ):
                     obs_vec.extend(self.tree_pos[t_i] - my_pos)
                 else:
-                    obs_vec.extend([0.0, 0.0])  # Masked
+                    obs_vec.extend(
+                        [0.0, 0.0]
+                    )  # Masked (invisible, occluded, or beyond num_trees)
 
             # 5. Victims
             for v_i in range(self.num_victims):
@@ -443,7 +478,7 @@ class SearchAndRescueEnv(ParallelEnv):
                 direction = (assigned_pos - self.victim_pos[v_i]) / (
                     np.linalg.norm(assigned_pos - self.victim_pos[v_i]) + 1e-6
                 )
-                follow_force = 0.02
+                follow_force = 0.04
                 self.victim_vel[v_i] = (
                     self.victim_vel[v_i] * 0.8 + direction * follow_force
                 )
@@ -611,6 +646,12 @@ class SearchAndRescueEnv(ParallelEnv):
                 rewards[agent] += delta * 0.1
         self.prev_agent_victim_dists = current_dists
 
+        # Small penalty for low velocity (encourage movement when victims aren't all saved)
+        for i, agent in enumerate(self.agents):
+            speed = np.linalg.norm(self.rescuer_vel[i])
+            if speed < 0.01:  # Nearly stationary
+                rewards[agent] -= 0.05
+
         # Check safe zones
         saved_count = 0
         for v_i in range(self.num_victims):
@@ -659,7 +700,9 @@ class SearchAndRescueEnv(ParallelEnv):
                             self.victim_pos[v_i] - self.safezone_pos[target_zone_idx]
                         )
                         # Reward proportional to inverse distance (closer to goal = higher reward)
-                        rewards[agent] += 1.0 / (dist_to_zone + 1e-6)
+                        # Capped to prevent infinite reward when very close
+                        proximity_reward = min(1.0 / (dist_to_zone + 0.1), 10.0)
+                        rewards[agent] += proximity_reward
 
         # Boundary penalties
         for i, agent in enumerate(self.agents):
