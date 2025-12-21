@@ -555,30 +555,11 @@ class SearchAndRescueEnv(ParallelEnv):
                 self.victim_saved[v_i] = True
                 saved_count += 1
 
-                # Reward the assigned agent (who escorted the victim)
-                # If no assignment, fall back to closest agent
+                # Reward ONLY the agent that was assigned to (escorting) this victim
                 assigned_agent_idx = self.victim_assignments[v_i]
                 if assigned_agent_idx != -1 and assigned_agent_idx < len(self.agents):
-                    # Primary reward to assigned agent who did the work
+                    # Reward only the assigned agent who did the work
                     rewards[self.agents[assigned_agent_idx]] += 100.0
-                else:
-                    # Fallback: reward closest agent
-                    min_dist = float("inf")
-                    closest_agent = None
-                    for j, a in enumerate(self.agents):
-                        dist = np.linalg.norm(self.rescuer_pos[j] - v_pos)
-                        if dist < min_dist:
-                            min_dist = dist
-                            closest_agent = a
-                    if closest_agent is not None:
-                        rewards[closest_agent] += 100.0
-
-                # Small bonus to nearby assisting agents (within follow radius)
-                for j, a in enumerate(self.agents):
-                    if j != assigned_agent_idx:
-                        dist = np.linalg.norm(self.rescuer_pos[j] - v_pos)
-                        if dist < self.follow_radius:
-                            rewards[a] += 10.0  # 10% bonus for assisting
 
         # Individual credit: reward assigned agent for escorting victim toward safe zone
         for v_i in range(self.num_victims):
