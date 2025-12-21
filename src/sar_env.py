@@ -127,7 +127,6 @@ class SearchAndRescueEnv(ParallelEnv):
         # Safe zones: randomized or at fixed corners
         if self.randomize_safe_zones:
             # Randomize positions within the world bounds
-            # Keep them near edges for better gameplay
             self.safezone_pos = self.np_random.uniform(
                 -0.95, 0.95, (self.num_safe_zones, 2)
             )
