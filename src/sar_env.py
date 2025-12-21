@@ -369,6 +369,18 @@ class SearchAndRescueEnv(ParallelEnv):
             if speed > 0.08:
                 self.rescuer_vel[i] = (self.rescuer_vel[i] / speed) * 0.08
 
+            # Inward push if we’re hugging the boundary to avoid sticking
+            margin = 0.85
+            inward_k = 0.02
+            if self.rescuer_pos[i][0] > margin:
+                self.rescuer_vel[i][0] -= inward_k
+            elif self.rescuer_pos[i][0] < -margin:
+                self.rescuer_vel[i][0] += inward_k
+            if self.rescuer_pos[i][1] > margin:
+                self.rescuer_vel[i][1] -= inward_k
+            elif self.rescuer_pos[i][1] < -margin:
+                self.rescuer_vel[i][1] += inward_k
+
             self.rescuer_pos[i] += self.rescuer_vel[i]
 
             # --- Wall collision handling (reflect and damp) ---
@@ -495,6 +507,18 @@ class SearchAndRescueEnv(ParallelEnv):
 
             self.victim_pos[v_i] += self.victim_vel[v_i]
             self.victim_pos[v_i] = np.clip(self.victim_pos[v_i], -1, 1)
+
+        # Gentle exploration if an agent sees no victims (breaks idling)
+        for i, agent in enumerate(self.agents):
+            sees_victim = any(
+                not self.victim_saved[v_i]
+                and self._is_visible(
+                    self.rescuer_pos[i], self.victim_pos[v_i], self.agent_size
+                )
+                for v_i in range(self.num_victims)
+            )
+            if (not sees_victim) and np.linalg.norm(self.rescuer_vel[i]) < 0.01:
+                self.rescuer_vel[i] += self.np_random.uniform(-0.02, 0.02, size=2)
 
         # 3. Logic: Rescues & Rewards
         saved_count = self._compute_rewards(rewards)
