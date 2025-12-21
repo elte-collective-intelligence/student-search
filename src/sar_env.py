@@ -81,30 +81,24 @@ class SearchAndRescueEnv(ParallelEnv):
             self.action_spaces = {agent: spaces.Discrete(5) for agent in self.agents}
 
         # Observation Space Calculation (Partial Observability with Vision Masking)
-        # [Self_Vel(2), Self_Pos(2), Agent_ID(num_rescuers),
-        #  SafeZones(4 * 4: rel_x, rel_y, type_idx, visible) - always visible (static landmarks),
-        #  Trees(N * 3: rel_x, rel_y, visible) - with explicit visibility bit,
-        #  Victims(N * 4: rel_x, rel_y, type_idx, visible) - with explicit visibility bit]
-        # Note: Trees and victims use visibility masking based on vision_radius and occlusion
-        # Note: Safe zones are always visible as they are static map objectives
-        # Note: Other rescuers removed from observation to focus learning on task
-        # Note: Observations are bounded - rel positions in [-3,3], types in [0, num_types-1], visible in [0,1]
-        # Note: True rel positions and types are ALWAYS provided; visibility bit gates usage (no sentinel values)
+        # Layout per agent:
+        # [self_vel(2), self_pos(2), agent_id(num_rescuers),
+        #  safe_zones(max_safe_zones * 3: rel_x, rel_y, type_idx or -1 if masked),
+        #  trees(max_trees * 3: rel_x, rel_y, visible_bit),
+        #  victims(num_victims * 3: rel_x, rel_y, type_idx or -1 if masked)]
+        self.max_safe_zones = self.num_safe_zones  # kept for clarity
 
         self.obs_dim = (
-            4
-            + num_rescuers  # Agent ID one-hot encoding
-            + (self.num_safe_zones * 4)  # rel_x, rel_y, type_idx, visible
-            + (self.num_trees * 3)  # rel_x, rel_y, visible
-            + (self.num_victims * 4)  # rel_x, rel_y, type_idx, visible
+            2  # self_vel
+            + 2  # self_pos
+            + self.num_rescuers  # agent_id one-hot
+            + (self.max_safe_zones * 3)
+            + (self.max_trees * 3)
+            + (self.num_victims * 3)
         )
 
         # Build bounded observation space
-        # Velocity: bounded by max speed (~0.08)
-        # Position: world is [-1, 1]
-        # Relative positions: max distance is 2*sqrt(2) ≈ 2.83, use [-3, 3] for safety
-        # Types: [0, num_safe_zones-1]
-        # Visible bits: [0, 1]
+        rel_low, rel_high = -3.0, 3.0  # generous bound for relative deltas
         obs_low = []
         obs_high = []
 
@@ -116,28 +110,30 @@ class SearchAndRescueEnv(ParallelEnv):
         obs_low.extend([-1.0, -1.0])
         obs_high.extend([1.0, 1.0])
 
-        # Agent ID one-hot (num_rescuers)
-        obs_low.extend([0.0] * num_rescuers)
-        obs_high.extend([1.0] * num_rescuers)
+        # Agent ID one-hot
+        obs_low.extend([0.0] * self.num_rescuers)
+        obs_high.extend([1.0] * self.num_rescuers)
 
-        # Safe zones (num_safe_zones * 4: rel_x, rel_y, type_idx, visible)
-        for _ in range(self.num_safe_zones):
-            obs_low.extend([-3.0, -3.0, 0.0, 0.0])  # rel_x, rel_y, type, visible
-            obs_high.extend([3.0, 3.0, float(self.num_safe_zones - 1), 1.0])
+        # Safe zones: rel_x, rel_y, type (or -1 when masked)
+        for _ in range(self.max_safe_zones):
+            obs_low.extend([rel_low, rel_low, -1.0])
+            obs_high.extend([rel_high, rel_high, float(self.num_safe_zones - 1)])
 
-        # Trees (num_trees * 3: rel_x, rel_y, visible)
-        for _ in range(self.num_trees):
-            obs_low.extend([-3.0, -3.0, 0.0])  # rel_x, rel_y, visible
-            obs_high.extend([3.0, 3.0, 1.0])
+        # Trees: rel_x, rel_y (masked to 0), visible bit
+        for _ in range(self.max_trees):
+            obs_low.extend([rel_low, rel_low, 0.0])
+            obs_high.extend([rel_high, rel_high, 1.0])
 
-        # Victims (num_victims * 4: rel_x, rel_y, type_idx, visible)
+        # Victims: rel_x, rel_y, type (or -1 when masked)
         for _ in range(self.num_victims):
-            obs_low.extend([-3.0, -3.0, 0.0, 0.0])  # rel_x, rel_y, type, visible
-            obs_high.extend([3.0, 3.0, float(self.num_safe_zones - 1), 1.0])
+            obs_low.extend([rel_low, rel_low, -1.0])
+            obs_high.extend([rel_high, rel_high, float(self.num_safe_zones - 1)])
 
         self.observation_spaces = {
             agent: spaces.Box(
-                low=-np.inf, high=np.inf, shape=(self.obs_dim,), dtype=np.float32
+                low=np.array(obs_low, dtype=np.float32),
+                high=np.array(obs_high, dtype=np.float32),
+                dtype=np.float32,
             )
             for agent in self.agents
         }
@@ -312,19 +308,20 @@ class SearchAndRescueEnv(ParallelEnv):
                     obs_vec.extend([0.0, 0.0, -1.0])
 
             # 4. Trees (always provide true rel_pos, visibility bit gates usage)
-            for t_i in range(self.num_trees):
-                rel_pos = self.tree_pos[t_i] - my_pos
-                visible = float(
-                    self._is_visible(
-                        my_pos,
-                        self.tree_pos[t_i],
-                        self.tree_radius,
-                        exclude_tree_idx=t_i,
+            for t_i in range(self.max_trees):
+                if t_i < self.num_trees:
+                    rel_pos = self.tree_pos[t_i] - my_pos
+                    visible = float(
+                        self._is_visible(
+                            my_pos,
+                            self.tree_pos[t_i],
+                            self.tree_radius,
+                            exclude_tree_idx=t_i,
+                        )
                     )
-                )
-                rel_pos *= visible
-                # [rel_x, rel_y, visible] - true position always provided
-                obs_vec.extend([rel_pos[0], rel_pos[1], visible])
+                    obs_vec.extend([rel_pos[0], rel_pos[1], visible])
+                else:
+                    obs_vec.extend([0.0, 0.0, 0.0])  # unused slot
 
             # 5. Victims
             for v_i in range(self.num_victims):
@@ -625,6 +622,13 @@ class SearchAndRescueEnv(ParallelEnv):
     def close(self):
         if self.screen:
             pygame.quit()
+
+    def set_num_trees(self, num_trees: int) -> None:
+        """Update the active number of trees (used by curriculum)."""
+        self.num_trees = int(np.clip(num_trees, 0, self.max_trees))
+        # If reducing trees mid-run, truncate positions to keep arrays in sync
+        if hasattr(self, "tree_pos"):
+            self.tree_pos = self.tree_pos[: self.num_trees]
 
     def _get_matching_zone_idx(self, victim_type: int) -> Optional[int]:
         """Find the safe zone index that accepts the given victim type."""

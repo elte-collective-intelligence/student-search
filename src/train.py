@@ -167,8 +167,9 @@ def train(
                 target_params=loss_module.target_critic_network_params,
             )
 
-        # Flatten batch time dimensions
+        # Flatten batch time dimensions (on-policy: reset buffer every batch)
         batch = batch.reshape(-1)
+        replay_buffer.empty()
         replay_buffer.extend(batch)
 
         # 2. PPO Update
