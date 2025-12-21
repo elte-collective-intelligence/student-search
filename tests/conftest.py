@@ -156,8 +156,23 @@ def get_victim_obs(obs_vec: np.ndarray, slices: dict, victim_idx: int) -> np.nda
 
 
 def get_safe_zone_obs(obs_vec: np.ndarray, slices: dict, zone_idx: int) -> np.ndarray:
-    """Extract observation for a specific safe zone."""
-    start = slices["safe_zones"].start + zone_idx * 3
+    """Extract observation for a specific safe zone.
+
+    Raises:
+        ValueError: If ``zone_idx`` is out of bounds for the available safe zones.
+    """
+    safe_slice = slices["safe_zones"]
+    # Each safe zone contributes 3 elements to the observation vector.
+    total_safe_zone_elems = safe_slice.stop - safe_slice.start
+    num_safe_zones = total_safe_zone_elems // 3
+
+    if zone_idx < 0 or zone_idx >= num_safe_zones:
+        raise ValueError(
+            f"zone_idx {zone_idx} is out of bounds for {num_safe_zones} safe zones "
+            f"(valid indices are 0 to {num_safe_zones - 1})."
+        )
+
+    start = safe_slice.start + zone_idx * 3
     return obs_vec[start : start + 3]  # noqa: E203
 
 
