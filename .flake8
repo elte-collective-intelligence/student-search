@@ -1,0 +1,4 @@
+[flake8]
+extend-ignore =
+	D
+max-line-length = 120

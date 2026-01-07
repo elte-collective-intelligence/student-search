@@ -1,0 +1,47 @@
+env:
+  victims: 12
+  rescuers: 6
+  trees: 8
+  safe_zones: 4
+  max_cycles: 300
+  continuous_actions: true
+  randomize_safe_zones: true
+  vision_radius: 0.4
+  n_closest_landmarks: 9
+  energy:
+    enabled: true
+    max_energy: 1.0            # energy in [0, max_energy]
+    movement_cost_coeff: 0.01  # cost per step scales with |action|
+    idle_cost: 0.001           # base cost every step
+    depleted_action_scale: 0.0 # 0.0 -> cannot move at 0 energy
+    num_chargers: 2
+    recharge_radius: 0.12
+    recharge_rate: 0.05        # energy per step when in range
+    randomize_chargers: true
+
+curriculum:
+  enabled: true  # Enable curriculum learning
+  min_trees: 0  # Starting number of trees (easy)
+  max_trees: 8  # Final number of trees (hard)
+  num_stages: 5  # Number of curriculum stages
+  # Scheduler will auto-calculate iterations_per_stage based on total_timesteps / num_stages
+train:
+  active: false
+  total_timesteps: 102400
+  eval_freq: 500
+  batch_size: 256
+  frames_per_batch: 2048
+  n_epochs: 20
+  render_mode: null
+  learning_rate: 0.0003
+eval:
+  active: false
+  games: 10
+  render_mode: "human"
+  model_path: null # full path to model checkpoint (pt file) or relative path from run context
+save_folder: "search_rescue_logs/"
+seed: 0
+tensorboard:
+  active: false
+  port: 6006
+  enabled: true  # Enable TensorBoard logging during train/eval

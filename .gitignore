@@ -19,6 +19,7 @@ venv/
 # IDE/editor config files
 .idea/
 .vscode/
+.history/
 
 # OS-specific files (macOS)
 .DS_Store
@@ -55,3 +56,8 @@ __pycache__/
 logs/
 outputs/
 wandb/
+
+# Python version
+.python-version
+
+search_rescue_logs/
